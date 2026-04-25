@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router";
 import {
   ChevronLeft, CheckCircle2, AlertCircle, Trees,
@@ -6,7 +6,11 @@ import {
 } from "lucide-react";
 import {
   MOCK_VISITS, VISIT_TYPE_SHORT, VISIT_TYPE_COLORS,
+  type Visit,
+  type VisitType,
+  type TreeInspection,
 } from "../../data/visitsData";
+import { supabase } from "../../../lib/supabase";
 
 function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString("en-AU", {
@@ -36,8 +40,150 @@ export function VisitDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<"overview" | "trees">("overview");
+  const [visit, setVisit] = useState<Visit | null>(null);
+  const [loadingVisit, setLoadingVisit] = useState(true);
 
-  const visit = MOCK_VISITS.find(v => v.id === id);
+  useEffect(() => {
+    let mounted = true;
+
+    const normalizeVisitType = (raw: string | null): VisitType => {
+      if (!raw) return "Routine Visit";
+      if (raw in VISIT_TYPE_SHORT) return raw as VisitType;
+      return "Routine Visit";
+    };
+
+    const loadVisit = async () => {
+      if (!id) {
+        if (!mounted) return;
+        setVisit(null);
+        setLoadingVisit(false);
+        return;
+      }
+
+      setLoadingVisit(true);
+      try {
+        const { data: visitRow, error: visitError } = await supabase
+          .from("visits")
+          .select("id, project_id, inspection_date, visit_type, inspector_name, notes, created_at")
+          .eq("id", id)
+          .maybeSingle();
+
+        if (visitError) throw visitError;
+
+        if (!visitRow) {
+          if (!mounted) return;
+          setVisit(MOCK_VISITS.find((mockVisit) => mockVisit.id === id) ?? null);
+          return;
+        }
+
+        const projectId = typeof visitRow.project_id === "string" ? visitRow.project_id : "";
+        const [{ data: projectRow, error: projectError }, { data: treeRecords, error: treeRecordsError }] = await Promise.all([
+          projectId
+            ? supabase.from("projects").select("id, name, slug").eq("id", projectId).maybeSingle()
+            : Promise.resolve({ data: null, error: null }),
+          supabase
+            .from("tree_visit_records")
+            .select("tree_id, tpm_status, health, damage, notes")
+            .eq("visit_id", id),
+        ]);
+
+        if (projectError) throw projectError;
+        if (treeRecordsError) throw treeRecordsError;
+
+        const treeIds = Array.from(
+          new Set(
+            (treeRecords ?? [])
+              .map((record) => {
+                if (record.tree_id == null) return "";
+                return String(record.tree_id).trim();
+              })
+              .filter((treeId): treeId is string => treeId.length > 0),
+          ),
+        );
+
+        let treeMetaMap = new Map<string, { botanical_name: string | null; location: string | null }>();
+        if (treeIds.length > 0) {
+          const { data: treesData, error: treesError } = await supabase
+            .from("trees")
+            .select("tree_id, botanical_name, location")
+            .in("tree_id", treeIds);
+
+          if (treesError) {
+            console.warn("Unable to enrich visit detail with tree metadata.", treesError);
+          } else {
+            treeMetaMap = new Map<string, { botanical_name: string | null; location: string | null }>(
+              (treesData ?? []).map((tree) => [String(tree.tree_id), { botanical_name: tree.botanical_name, location: tree.location }]),
+            );
+          }
+        }
+
+        const normalizedTreeInspections: TreeInspection[] = (treeRecords ?? []).map((record) => {
+          const normalizedTreeId = record.tree_id == null ? "" : String(record.tree_id).trim();
+          const treeMeta = normalizedTreeId ? treeMetaMap.get(normalizedTreeId) : null;
+
+          return {
+            treeId: normalizedTreeId || "Unknown",
+            botanicalName: treeMeta?.botanical_name ?? "",
+            location: treeMeta?.location ?? "",
+            noChange: false,
+            tpmCompliance: record.tpm_status === "compliant" || record.tpm_status === "not-compliant"
+              ? record.tpm_status
+              : "pending",
+            health: record.health === "Good" || record.health === "Fair" || record.health === "Poor" || record.health === "Dead"
+              ? record.health
+              : "",
+            damage: record.damage === "Yes" || record.damage === "No"
+              ? record.damage
+              : "",
+            notes: record.notes ?? "",
+          };
+        });
+
+        const inspectedTrees = normalizedTreeInspections.length;
+        const breachCount = normalizedTreeInspections.filter((record) => record.tpmCompliance === "not-compliant").length;
+
+        const mappedVisit: Visit = {
+          id: visitRow.id,
+          projectId: projectRow?.slug ?? projectId,
+          projectName: projectRow?.name ?? "Unknown Project",
+          date: visitRow.inspection_date ?? visitRow.created_at ?? new Date().toISOString(),
+          type: normalizeVisitType(visitRow.visit_type),
+          inspector: visitRow.inspector_name ?? "Unknown Inspector",
+          status: "completed",
+          totalTrees: inspectedTrees,
+          inspectedTrees,
+          noChangeTrees: 0,
+          breachCount,
+          notes: visitRow.notes ?? "",
+          treeInspections: normalizedTreeInspections,
+        };
+
+        if (!mounted) return;
+        setVisit(mappedVisit);
+      } catch (error) {
+        console.error("Failed to fetch visit detail from Supabase:", error);
+        if (!mounted) return;
+        setVisit(MOCK_VISITS.find((mockVisit) => mockVisit.id === id) ?? null);
+      } finally {
+        if (mounted) setLoadingVisit(false);
+      }
+    };
+
+    void loadVisit();
+
+    return () => {
+      mounted = false;
+    };
+  }, [id]);
+
+  if (loadingVisit) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen gap-4 px-8 text-center">
+        <Calendar size={40} color="#9CA3AF" />
+        <p style={{ color: "#374151", fontSize: "0.95rem", fontWeight: 700 }}>Loading visit…</p>
+      </div>
+    );
+  }
 
   if (!visit) {
     return (
