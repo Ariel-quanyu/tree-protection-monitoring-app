@@ -9,6 +9,7 @@ import {
   VISIT_TYPE_SHORT,
   VISIT_TYPE_COLORS,
   type Visit,
+  type VisitStatus,
   type VisitType,
 } from "../../data/visitsData";
 import { useProject } from "../../context/ProjectContext";
@@ -34,6 +35,7 @@ type VisitRow = {
   project_id: string | null;
   inspection_date: string | null;
   visit_type: string | null;
+  status: string | null;
   inspector_name: string | null;
   notes: string | null;
   created_at: string | null;
@@ -54,6 +56,11 @@ function normalizeVisitType(raw: string | null): VisitType {
   if (!raw) return "Routine Visit";
   if (raw in VISIT_TYPE_SHORT) return raw as VisitType;
   return "Routine Visit";
+}
+
+function normalizeVisitStatus(raw: string | null): VisitStatus {
+  if (raw === "draft" || raw === "completed") return raw;
+  return "completed";
 }
 
 // ── Visit type badge ──────────────────────────────────────────────────────────
@@ -212,7 +219,7 @@ export function VisitsPage() {
       try {
         const { data: visitsData, error: visitsError } = await supabase
           .from("visits")
-          .select("id, project_id, inspection_date, visit_type, inspector_name, notes, created_at")
+          .select("id, project_id, inspection_date, visit_type, status, inspector_name, notes, created_at")
           .order("inspection_date", { ascending: false })
           .order("created_at", { ascending: false });
 
@@ -262,7 +269,7 @@ export function VisitsPage() {
             date: row.inspection_date ?? row.created_at ?? new Date().toISOString(),
             type: normalizeVisitType(row.visit_type),
             inspector: row.inspector_name ?? "Unknown Inspector",
-            status: "completed",
+            status: normalizeVisitStatus(row.status),
             totalTrees: summary.inspectedTrees,
             inspectedTrees: summary.inspectedTrees,
             noChangeTrees: 0,
@@ -276,20 +283,28 @@ export function VisitsPage() {
           };
         });
 
-        const mergedVisits: VisitListItem[] = [
-          ...mappedRealVisits,
-          ...MOCK_VISITS.map((visit) => ({
+        const visitsToRender: VisitListItem[] = mappedRealVisits.length > 0
+          ? mappedRealVisits
+          : MOCK_VISITS.map((visit) => ({
+              ...visit,
+              source: "mock" as const,
+              projectUuid: "",
+              projectSlug: visit.projectId,
+            }));
+
+        if (!mounted) return;
+        setVisits(visitsToRender);
+      } catch (error) {
+        console.error("Failed to fetch visits from Supabase:", error);
+        if (!mounted) return;
+        setVisits(
+          MOCK_VISITS.map((visit) => ({
             ...visit,
-            source: "mock" as const,
+            source: "mock",
             projectUuid: "",
             projectSlug: visit.projectId,
           })),
-        ];
-
-        if (!mounted) return;
-        setVisits(mergedVisits);
-      } catch (error) {
-        console.error("Failed to fetch visits from Supabase:", error);
+        );
       } finally {
         if (mounted) setLoadingVisits(false);
       }
