@@ -15,11 +15,6 @@ function asString(v: unknown, fallback = ""): string {
   return String(v);
 }
 
-function asNumber(v: unknown, fallback = 0): number {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : fallback;
-}
-
 function mapVisitRow(row: Record<string, unknown>): Visit {
   return {
     id: asString(row.id),
@@ -29,10 +24,10 @@ function mapVisitRow(row: Record<string, unknown>): Visit {
     type: asString(row.visit_type ?? row.type) as VisitType,
     inspector: asString(row.inspector_name ?? row.inspector),
     status: "completed",
-    totalTrees: asNumber(row.total_trees ?? row.totalTrees),
-    inspectedTrees: asNumber(row.inspected_trees ?? row.inspectedTrees),
-    noChangeTrees: asNumber(row.no_change_trees ?? row.noChangeTrees),
-    breachCount: asNumber(row.breach_count ?? row.breachCount),
+    totalTrees: 0,
+    inspectedTrees: 0,
+    noChangeTrees: 0,
+    breachCount: 0,
     notes: asString(row.notes),
     treeInspections: [],
   };
@@ -42,7 +37,8 @@ export async function fetchVisits(): Promise<Visit[]> {
   const { data, error } = await supabase
     .from("visits")
     .select("*")
-    .order("inspection_date", { ascending: false });
+    .order("inspection_date", { ascending: false })
+    .order("created_at", { ascending: false });
 
   if (error) throw error;
   return (data ?? []).map((row) => mapVisitRow(row as Record<string, unknown>));
