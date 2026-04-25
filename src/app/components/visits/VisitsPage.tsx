@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect } from "react";
 import { useNavigate, useLocation } from "react-router";
 import {
   ClipboardCheck, ChevronRight, AlertCircle, CheckCircle2,
-  Clock, Calendar, User, Trees, X, Filter,
+  Clock, User, Trees, X, Filter,
 } from "lucide-react";
 import {
   MOCK_VISITS,
@@ -12,20 +12,48 @@ import {
   type VisitType,
 } from "../../data/visitsData";
 import { useProject } from "../../context/ProjectContext";
-import { fetchVisits } from "../../data/visitsApi";
+import { supabase } from "../../../lib/supabase";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-function formatDate(iso: string) {
-  return new Date(iso).toLocaleDateString("en-AU", {
-    day: "numeric", month: "short", year: "numeric",
-  });
-}
 
 function compliancePct(v: Visit) {
   if (v.inspectedTrees === 0) return null;
   const compliant = v.inspectedTrees - v.breachCount;
   return Math.round((compliant / v.inspectedTrees) * 100);
+}
+
+interface VisitListItem extends Visit {
+  source: "real" | "mock";
+  projectUuid: string;
+  projectSlug: string;
+  createdAt?: string;
+}
+
+type VisitRow = {
+  id: string;
+  project_id: string | null;
+  inspection_date: string | null;
+  visit_type: string | null;
+  inspector_name: string | null;
+  notes: string | null;
+  created_at: string | null;
+};
+
+type ProjectRow = {
+  id: string;
+  name: string | null;
+  slug: string | null;
+};
+
+type TreeVisitRecordRow = {
+  visit_id: string | null;
+  tpm_status: string | null;
+};
+
+function normalizeVisitType(raw: string | null): VisitType {
+  if (!raw) return "Routine Visit";
+  if (raw in VISIT_TYPE_SHORT) return raw as VisitType;
+  return "Routine Visit";
 }
 
 // ── Visit type badge ──────────────────────────────────────────────────────────
@@ -163,41 +191,144 @@ type StatusFilter = "all" | "draft" | "completed";
 export function VisitsPage() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { projects, selectedProjectId } = useProject();
+  const { projects } = useProject();
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [projectFilter, setProjectFilter] = useState<string>("all");
-  const [visits, setVisits] = useState<Visit[]>(MOCK_VISITS);
+  const [visits, setVisits] = useState<VisitListItem[]>(
+    MOCK_VISITS.map((visit) => ({
+      ...visit,
+      source: "mock",
+      projectUuid: "",
+      projectSlug: visit.projectId,
+    })),
+  );
   const [loadingVisits, setLoadingVisits] = useState(false);
+  const refreshVisitsAt = (location.state as { refreshVisitsAt?: number } | null)?.refreshVisitsAt;
 
   useEffect(() => {
     let mounted = true;
-    setLoadingVisits(true);
-    fetchVisits()
-      .then((data) => {
+    const loadVisits = async () => {
+      setLoadingVisits(true);
+      try {
+        const { data: visitsData, error: visitsError } = await supabase
+          .from("visits")
+          .select("id, project_id, inspection_date, visit_type, inspector_name, notes, created_at")
+          .order("inspection_date", { ascending: false })
+          .order("created_at", { ascending: false });
+
+        if (visitsError) throw visitsError;
+
+        const typedVisits = (visitsData ?? []) as VisitRow[];
+        const visitIds = typedVisits.map((visit) => visit.id);
+        const projectIds = Array.from(
+          new Set(typedVisits.map((visit) => visit.project_id).filter((projectId): projectId is string => Boolean(projectId))),
+        );
+
+        const [{ data: projectsData, error: projectsError }, { data: recordsData, error: recordsError }] = await Promise.all([
+          projectIds.length > 0
+            ? supabase.from("projects").select("id, name, slug").in("id", projectIds)
+            : Promise.resolve({ data: [], error: null }),
+          visitIds.length > 0
+            ? supabase.from("tree_visit_records").select("visit_id, tpm_status").in("visit_id", visitIds)
+            : Promise.resolve({ data: [], error: null }),
+        ]);
+
+        if (projectsError) throw projectsError;
+        if (recordsError) throw recordsError;
+
+        const projectMap = new Map<string, ProjectRow>(
+          ((projectsData ?? []) as ProjectRow[]).map((project) => [project.id, project]),
+        );
+
+        const recordSummaryByVisitId = new Map<string, { inspectedTrees: number; breachCount: number }>();
+        ((recordsData ?? []) as TreeVisitRecordRow[]).forEach((record) => {
+          if (!record.visit_id) return;
+          const current = recordSummaryByVisitId.get(record.visit_id) ?? { inspectedTrees: 0, breachCount: 0 };
+          current.inspectedTrees += 1;
+          if (record.tpm_status === "not-compliant") current.breachCount += 1;
+          recordSummaryByVisitId.set(record.visit_id, current);
+        });
+
+        const mappedRealVisits: VisitListItem[] = typedVisits.map((row) => {
+          const project = row.project_id ? projectMap.get(row.project_id) : null;
+          const summary = recordSummaryByVisitId.get(row.id) ?? { inspectedTrees: 0, breachCount: 0 };
+          const projectSlug = project?.slug ?? row.project_id ?? "";
+          const projectName = project?.name ?? "Unknown Project";
+
+          return {
+            id: row.id,
+            projectId: projectSlug,
+            projectName,
+            date: row.inspection_date ?? row.created_at ?? new Date().toISOString(),
+            type: normalizeVisitType(row.visit_type),
+            inspector: row.inspector_name ?? "Unknown Inspector",
+            status: "completed",
+            totalTrees: summary.inspectedTrees,
+            inspectedTrees: summary.inspectedTrees,
+            noChangeTrees: 0,
+            breachCount: summary.breachCount,
+            notes: row.notes ?? "",
+            treeInspections: [],
+            source: "real",
+            projectUuid: row.project_id ?? "",
+            projectSlug,
+            createdAt: row.created_at ?? undefined,
+          };
+        });
+
+        const mergedVisits: VisitListItem[] = [
+          ...mappedRealVisits,
+          ...MOCK_VISITS.map((visit) => ({
+            ...visit,
+            source: "mock" as const,
+            projectUuid: "",
+            projectSlug: visit.projectId,
+          })),
+        ];
+
         if (!mounted) return;
-        setVisits(data);
-      })
-      .catch((error) => {
+        setVisits(mergedVisits);
+      } catch (error) {
         console.error("Failed to fetch visits from Supabase:", error);
-      })
-      .finally(() => {
+      } finally {
         if (mounted) setLoadingVisits(false);
-      });
+      }
+    };
+
+    void loadVisits();
 
     return () => {
       mounted = false;
     };
-  }, [location.state]);
+  }, [refreshVisitsAt, location.key]);
 
   const filtered = useMemo(() => {
+    const selectedProject = projects.find((project) => project.id === projectFilter);
+    const filterSlug = selectedProject?.id ?? projectFilter;
+    const filterUuid = selectedProject?.uuid ?? projectFilter;
+
     return visits
-      .filter(v => {
-        if (statusFilter !== "all" && v.status !== statusFilter) return false;
-        if (projectFilter !== "all" && v.projectId !== projectFilter) return false;
+      .filter((visit) => {
+        if (statusFilter !== "all" && visit.status !== statusFilter) return false;
+        if (projectFilter !== "all") {
+          const matchesProject =
+            visit.projectUuid === filterUuid
+            || visit.projectSlug === filterSlug
+            || visit.projectId === filterSlug
+            || visit.projectId === filterUuid;
+          if (!matchesProject) return false;
+        }
         return true;
       })
-      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  }, [visits, statusFilter, projectFilter]);
+      .sort((a, b) => {
+        if (a.source !== b.source) {
+          return a.source === "real" ? -1 : 1;
+        }
+        const dateDelta = new Date(b.date).getTime() - new Date(a.date).getTime();
+        if (dateDelta !== 0) return dateDelta;
+        return new Date(b.createdAt ?? b.date).getTime() - new Date(a.createdAt ?? a.date).getTime();
+      });
+  }, [visits, statusFilter, projectFilter, projects]);
 
   const totalBreaches = visits.reduce((s, v) => s + v.breachCount, 0);
   const totalCompleted = visits.filter(v => v.status === "completed").length;
