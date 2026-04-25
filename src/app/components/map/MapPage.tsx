@@ -1,0 +1,968 @@
+import React, { useState, useMemo, useEffect, useRef } from "react";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
+import { useNavigate } from "react-router";
+import {
+  Search, X, ChevronRight, TreePine,
+  ChevronDown, ChevronUp, SlidersHorizontal,
+  Info, AlertCircle, ArrowLeft, ZoomIn, ZoomOut, Crosshair,
+  MapPin, WifiOff,
+} from "lucide-react";
+import { supabase } from "../../../lib/supabase";
+import { useSelectedProject, useProject } from "../../context/ProjectContext";
+import { type SupabaseTree, mapSupabaseTree } from "../../data/treeMapper";
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+type MapMode       = "sites" | "trees";
+type StatusFilter  = "all" | "compliant" | "not-compliant";
+type SymbologyMode = "none" | "nrz" | "srz" | "dsh";
+
+// ── Colour helpers — compliance only (green = compliant, red = not compliant) ─
+
+function complianceColor(uiStatus: string): string {
+  return uiStatus === "compliant" ? "#16A34A" : "#DC2626";
+}
+
+function complianceBg(uiStatus: string): string {
+  return uiStatus === "compliant" ? "#DCFCE7" : "#FEE2E2";
+}
+
+function complianceLabel(uiStatus: string): string {
+  return uiStatus === "compliant" ? "Compliant" : "Not Compliant";
+}
+
+const PROJECT_STATUS_COLOR: Record<string, string> = {
+  active:     "#2D5A27",
+  monitoring: "#D97706",
+  completed:  "#6B7280",
+};
+
+const PROJECT_STATUS_BG: Record<string, string> = {
+  active:     "#DCFCE7",
+  monitoring: "#FEF3C7",
+  completed:  "#F3F4F6",
+};
+
+// ── Geo constants ─────────────────────────────────────────────────────────────
+
+const MELBOURNE_CENTRE: [number, number] = [-37.820, 144.955];
+const MELBOURNE_ZOOM = 11;
+
+const PROJECT_CENTRES: Record<string, [number, number]> = {
+  "parliament-vic":   [-37.8110, 144.9731],
+  "royal-botanic":    [-37.8305, 144.9799],
+  "queen-vic-market": [-37.8072, 144.9569],
+  "west-gate-tunnel": [-37.8374, 144.8951],
+  "fitzroy-gardens":  [-37.8141, 144.9812],
+};
+
+const PROJECT_ABBREV: Record<string, string> = {
+  "parliament-vic":   "PARL",
+  "royal-botanic":    "RBG",
+  "queen-vic-market": "QVM",
+  "west-gate-tunnel": "WGT",
+  "fitzroy-gardens":  "FG",
+};
+
+const PROJECT_COORDS: Record<string, string> = {
+  "parliament-vic":   "-37.8110, 144.9731",
+  "royal-botanic":    "-37.8305, 144.9799",
+  "queen-vic-market": "-37.8072, 144.9569",
+  "west-gate-tunnel": "-37.8374, 144.8951",
+  "fitzroy-gardens":  "-37.8141, 144.9812",
+};
+
+// ── Legend items ──────────────────────────────────────────────────────────────
+
+const LEGEND_ITEMS = [
+  { label: "Compliant",     color: "#16A34A" },
+  { label: "Not Compliant", color: "#DC2626" },
+];
+
+// ── Helper functions ──────────────────────────────────────────────────────────
+
+function getGenus(species: string): string {
+  return species.split(" ")[0];
+}
+
+/** Build the HTML for a project site marker divIcon */
+function makeSiteIconHtml(
+  abbrev: string,
+  statusColor: string,
+  isSelected: boolean,
+  flagged: number,
+  hasData: boolean,
+): string {
+  const ring = isSelected
+    ? `box-shadow:0 0 0 3px ${statusColor},0 4px 16px rgba(0,0,0,0.38);border:4px solid white;`
+    : `box-shadow:0 3px 12px rgba(0,0,0,0.30);border:3px solid white;`;
+
+  const badge = flagged > 0
+    ? `<div style="position:absolute;top:-5px;right:-5px;min-width:19px;height:19px;padding:0 3px;background:#EF4444;border-radius:10px;border:2px solid white;display:flex;align-items:center;justify-content:center;box-sizing:border-box;">
+         <span style="color:white;font-size:9px;font-weight:800;line-height:1;">${flagged}</span>
+       </div>`
+    : "";
+
+  const dataDot = hasData
+    ? `<div style="position:absolute;bottom:-3px;left:50%;transform:translateX(-50%);width:8px;height:8px;background:#4ADE80;border-radius:50%;border:2px solid white;"></div>`
+    : "";
+
+  return `
+    <div style="position:relative;width:52px;height:52px;">
+      <div style="width:52px;height:52px;background:${statusColor};${ring}border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;">
+        <span style="color:white;font-size:9px;font-weight:800;letter-spacing:0.06em;line-height:1;font-family:Inter,sans-serif;">${abbrev}</span>
+      </div>
+      ${badge}
+      ${dataDot}
+    </div>
+  `;
+}
+
+// ── ChipSelect sub-component ──────────────────────────────────────────────────
+
+function ChipSelect<T extends string>({
+  label, options, value, onChange,
+}: {
+  label: string;
+  options: { value: T; label: string }[];
+  value: T;
+  onChange: (v: T) => void;
+}) {
+  return (
+    <div>
+      <p style={{ color: "#9CA3AF", fontSize: "0.6rem", fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 7 }}>
+        {label}
+      </p>
+      <div className="flex gap-1.5 flex-wrap">
+        {options.map(o => {
+          const active = value === o.value;
+          return (
+            <button
+              key={o.value}
+              onClick={() => onChange(o.value)}
+              className="rounded-full px-3 py-1.5 transition-all active:scale-95"
+              style={{
+                background: active ? "#1B4332" : "#F3F4F6",
+                color:      active ? "white"   : "#4B5563",
+                fontSize:   "0.72rem",
+                fontWeight: active ? 700 : 500,
+                border:     `1.5px solid ${active ? "#1B4332" : "#E5E7EB"}`,
+              }}
+            >
+              {o.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── MapPage ───────────────────────────────────────────────────────────────────
+
+export function MapPage() {
+  const navigate = useNavigate();
+  const { project, setSelectedProjectId } = useSelectedProject();
+  const { projects } = useProject();
+
+  // ── UI state ─────────────────────────────────────────────────────────────
+  const [mapMode,      setMapMode]      = useState<MapMode>("sites");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [symbology,    setSymbology]    = useState<SymbologyMode>("none");
+  const [search,       setSearch]       = useState("");
+  const [selectedTree, setSelectedTree] = useState<SupabaseTree | null>(null);
+  const [showLegend,   setShowLegend]   = useState(false);
+  const [showControls, setShowControls] = useState(true);
+
+  // ── Tree data state ───────────────────────────────────────────────────────
+  const [allTrees,     setAllTrees]     = useState<SupabaseTree[]>([]);
+  const [loadingTrees, setLoadingTrees] = useState(false);
+  const [treeError,    setTreeError]    = useState<string | null>(null);
+  const [projectsWithData, setProjectsWithData] = useState<Set<string>>(new Set());
+
+  // ── Leaflet refs ──────────────────────────────────────────────────────────
+  const mapContainerRef   = useRef<HTMLDivElement>(null);
+  const mapInstanceRef    = useRef<L.Map | null>(null);
+  const siteMarkersRef    = useRef<L.Marker[]>([]);
+  const treeMarkersRef    = useRef<Map<string, L.CircleMarker>>(new Map());
+  const overlayCirclesRef = useRef<L.Circle[]>([]);
+
+  // ── Fetch trees ───────────────────────────────────────────────────────────
+  useEffect(() => {
+    const uuid = project?.uuid;
+    const slug = project?.id;
+    if (!uuid || !slug) return;
+
+    let cancelled = false;
+    setLoadingTrees(true);
+    setTreeError(null);
+    setAllTrees([]);
+
+    supabase
+      .from("trees")
+      .select("*")
+      .eq("project_id", uuid)
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        if (error) {
+          setTreeError(error.message);
+          setLoadingTrees(false);
+          return;
+        }
+        const mapped: SupabaseTree[] = (data ?? []).map(
+          row => mapSupabaseTree(row as Record<string, unknown>, slug)
+        );
+        setAllTrees(mapped);
+        if (mapped.length > 0) setProjectsWithData(prev => new Set([...prev, slug]));
+        setLoadingTrees(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [project?.uuid, project?.id]);
+
+  // ── Derived data ──────────────────────────────────────────────────────────
+  const { filteredTrees, focusTree } = useMemo(() => {
+    // statusFilter mapping — "not-compliant" means uiStatus !== "compliant"
+    const statusFiltered =
+      statusFilter === "all"           ? allTrees :
+      statusFilter === "compliant"     ? allTrees.filter(t => t.uiStatus === "compliant") :
+                                         allTrees.filter(t => t.uiStatus !== "compliant");
+
+    if (!search.trim()) return { filteredTrees: statusFiltered, focusTree: null };
+    const q = search.toLowerCase();
+    const m = statusFiltered.filter(t =>
+      t.id.toLowerCase().includes(q) ||
+      t.botanicalName.toLowerCase().includes(q) ||
+      t.commonName.toLowerCase().includes(q)
+    );
+    return { filteredTrees: m, focusTree: m[0] ?? null };
+  }, [allTrees, statusFilter, search]);
+
+  const searchActive = search.trim() !== "";
+  const matchSet     = useMemo(() => new Set(filteredTrees.map(t => t.id)), [filteredTrees]);
+
+  const stats = useMemo(() => ({
+    total:        allTrees.length,
+    compliant:    allTrees.filter(t => t.uiStatus === "compliant").length,
+    notCompliant: allTrees.filter(t => t.uiStatus !== "compliant").length,
+  }), [allTrees]);
+
+  const hasTreeData = !loadingTrees && allTrees.length > 0;
+  const modified    = statusFilter !== "all" || symbology !== "none";
+
+  const portfolio = useMemo(() => ({
+    total:        projects.length,
+    active:       projects.filter(p => p.status === "active").length,
+    monitoring:   projects.filter(p => p.status === "monitoring").length,
+    totalTrees:   projects.reduce((s, p) => s + p.totalTrees, 0),
+    totalFlagged: projects.reduce((s, p) => s + p.flaggedTrees, 0),
+  }), [projects]);
+
+  const coordLabel = project ? (PROJECT_COORDS[project.id] ?? "") : "";
+
+  // ── Effect 1: Init Leaflet ────────────────────────────────────────────────
+  useEffect(() => {
+    if (mapInstanceRef.current || !mapContainerRef.current) return;
+
+    const map = L.map(mapContainerRef.current, {
+      center: MELBOURNE_CENTRE, zoom: MELBOURNE_ZOOM,
+      zoomControl: false, attributionControl: true,
+    });
+    map.attributionControl.setPrefix("");
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: '© <a href="https://www.openstreetmap.org/copyright">OSM</a>',
+      maxZoom: 20,
+    }).addTo(map);
+    mapInstanceRef.current = map;
+
+    return () => {
+      map.remove();
+      mapInstanceRef.current = null;
+      siteMarkersRef.current = [];
+      treeMarkersRef.current.clear();
+      overlayCirclesRef.current = [];
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── Effect 2: Fit view ────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!project) return;
+    const map = mapInstanceRef.current;
+    if (!map) return;
+    if (mapMode === "sites") {
+      map.flyTo(MELBOURNE_CENTRE, MELBOURNE_ZOOM, { animate: true, duration: 0.75 });
+    } else if (allTrees.length > 0) {
+      map.fitBounds(
+        L.latLngBounds(allTrees.map(t => [t.latitude, t.longitude] as [number, number])),
+        { padding: [32, 32], maxZoom: 18, animate: true }
+      );
+    } else if (!loadingTrees) {
+      map.flyTo(PROJECT_CENTRES[project.id] ?? MELBOURNE_CENTRE, 16, { animate: true });
+    }
+  }, [mapMode, allTrees, loadingTrees, project?.id]);
+
+  // ── Effect 3: Rebuild markers ─────────────────────────────────────────────
+  useEffect(() => {
+    if (!project) return;
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    siteMarkersRef.current.forEach(m => m.remove());
+    siteMarkersRef.current = [];
+    treeMarkersRef.current.forEach(m => m.remove());
+    treeMarkersRef.current.clear();
+    overlayCirclesRef.current.forEach(c => c.remove());
+    overlayCirclesRef.current = [];
+
+    if (mapMode === "sites") {
+      projects.forEach(proj => {
+        const centre = PROJECT_CENTRES[proj.id];
+        if (!centre) return;
+        const statusColor = PROJECT_STATUS_COLOR[proj.status] ?? "#6B7280";
+        const isSelected  = proj.id === project.id;
+        const abbrev      = PROJECT_ABBREV[proj.id] ?? proj.name.slice(0, 4).toUpperCase();
+        const icon = L.divIcon({
+          html:      makeSiteIconHtml(abbrev, statusColor, isSelected, proj.flaggedTrees, projectsWithData.has(proj.id)),
+          className: "",
+          iconSize:  [52, 52],
+          iconAnchor:[26, 26],
+        });
+        const marker = L.marker(centre, { icon }).addTo(map);
+        marker.on("click", () => { setSelectedProjectId(proj.id); setMapMode("trees"); });
+        siteMarkersRef.current.push(marker);
+      });
+
+    } else {
+      if (loadingTrees || allTrees.length === 0) return;
+
+      allTrees.forEach(tree => {
+        // Filter by compliance status
+        if (statusFilter === "compliant"     && tree.uiStatus !== "compliant") return;
+        if (statusFilter === "not-compliant" && tree.uiStatus === "compliant") return;
+
+        const color      = complianceColor(tree.uiStatus);
+        const inSearch   = !searchActive || matchSet.has(tree.id);
+        const isSelected = selectedTree?.id === tree.id;
+
+        const radius = symbology === "dsh"
+          ? Math.max(4, Math.min(14, tree.nrzRadius * 0.85))
+          : isSelected ? 10 : 7;
+
+        const marker = L.circleMarker([tree.latitude, tree.longitude], {
+          radius,
+          fillColor:   color,
+          color:       isSelected ? "#FFFFFF" : "rgba(0,0,0,0.4)",
+          weight:      isSelected ? 2.5 : 1,
+          fillOpacity: inSearch ? 0.88 : 0.1,
+          opacity:     inSearch ? 1    : 0.18,
+        }).addTo(map);
+
+        // Tapping a tree navigates directly to its detail page
+        marker.on("click", () => {
+          setSelectedTree(tree);
+          mapInstanceRef.current?.panTo([tree.latitude, tree.longitude], { animate: true });
+        });
+        treeMarkersRef.current.set(tree.id, marker);
+
+        if (symbology === "nrz" && inSearch) {
+          const c = L.circle([tree.latitude, tree.longitude], {
+            radius: tree.nrzRadius, color, weight: 1.5,
+            fillColor: color, fillOpacity: 0.07, dashArray: "6 4",
+          }).addTo(map);
+          overlayCirclesRef.current.push(c);
+        }
+        if (symbology === "srz" && inSearch && tree.srzRadius) {
+          const c = L.circle([tree.latitude, tree.longitude], {
+            radius: tree.srzRadius, color, weight: 1.5,
+            fillColor: color, fillOpacity: 0.12, dashArray: "4 3",
+          }).addTo(map);
+          overlayCirclesRef.current.push(c);
+        }
+      });
+    }
+  }, [
+    mapMode, allTrees, loadingTrees, statusFilter, symbology,
+    searchActive, matchSet, selectedTree,
+    project?.id, projects, projectsWithData,
+  ]);
+
+  // ── Effect 4: Pan to search focus ─────────────────────────────────────────
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map || !focusTree) return;
+    map.panTo([focusTree.latitude, focusTree.longitude], { animate: true });
+  }, [focusTree]);
+
+  // ── Effect 5: Reset state on mode change ──────────────────────────────────
+  useEffect(() => { setSelectedTree(null); setSearch(""); }, [mapMode]);
+
+  // ── Loading guard ─────────────────────────────────────────────────────────
+  if (!project) {
+    return (
+      <div className="pb-28">
+        <div className="px-4 pt-12 pb-3" style={{ background: "linear-gradient(160deg, #1B4332 0%, #2D5A27 100%)" }}>
+          <div className="rounded-xl animate-pulse" style={{ height: 60, background: "rgba(255,255,255,0.1)" }} />
+        </div>
+        <div className="animate-pulse" style={{ height: 280, background: "#E5E7EB" }} />
+      </div>
+    );
+  }
+
+  // ── Map control handlers ──────────────────────────────────────────────────
+  const handleZoomIn    = () => mapInstanceRef.current?.zoomIn();
+  const handleZoomOut   = () => mapInstanceRef.current?.zoomOut();
+  const handleResetView = () => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+    if (mapMode === "sites") {
+      map.flyTo(MELBOURNE_CENTRE, MELBOURNE_ZOOM, { animate: true });
+    } else if (allTrees.length > 0) {
+      map.fitBounds(
+        L.latLngBounds(allTrees.map(t => [t.latitude, t.longitude] as [number, number])),
+        { padding: [32, 32], maxZoom: 18 }
+      );
+    } else {
+      map.flyTo(PROJECT_CENTRES[project.id] ?? MELBOURNE_CENTRE, 16, { animate: true });
+    }
+  };
+
+  const handleTreeSelect = (tree: SupabaseTree) => {
+    setSelectedTree(prev => prev?.id === tree.id ? null : tree);
+    mapInstanceRef.current?.panTo([tree.latitude, tree.longitude], { animate: true });
+  };
+
+  // ── Render ────────────────────────────────────────────────────────────────
+  return (
+    <div className="flex flex-col pb-28" style={{ minHeight: "100%" }}>
+
+      {/* ── Header ─────────────────────────────────────────────────────────── */}
+      <div className="px-4 pt-12 pb-3" style={{ background: "linear-gradient(160deg, #1B4332 0%, #2D5A27 100%)" }}>
+        {mapMode === "sites" ? (
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex-1 min-w-0">
+              <p style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.6rem", letterSpacing: "0.13em", textTransform: "uppercase", marginBottom: 2 }}>Map</p>
+              <h1 style={{ color: "white", fontSize: "1.18rem", fontWeight: 800, lineHeight: 1.2 }}>Melbourne Portfolio</h1>
+              <p style={{ color: "rgba(255,255,255,0.6)", fontSize: "0.72rem", marginTop: 3 }}>
+                {portfolio.active} active · {portfolio.monitoring} monitoring
+              </p>
+            </div>
+            <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
+              {portfolio.totalFlagged > 0 && (
+                <div className="flex items-center gap-1 px-2 py-1 rounded-full" style={{ background: "#EF4444" }}>
+                  <AlertCircle size={10} color="white" />
+                  <span style={{ color: "white", fontSize: "0.63rem", fontWeight: 700 }}>{portfolio.totalFlagged} Flagged</span>
+                </div>
+              )}
+              <div className="flex items-center gap-1 px-2 py-1 rounded-full" style={{ background: "rgba(255,255,255,0.12)" }}>
+                <span style={{ color: "rgba(255,255,255,0.8)", fontSize: "0.63rem" }}>{portfolio.totalTrees.toLocaleString()} trees</span>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div>
+            <button onClick={() => setMapMode("sites")} className="flex items-center gap-1.5 mb-2.5 active:opacity-70 transition-opacity">
+              <ArrowLeft size={13} color="rgba(255,255,255,0.7)" />
+              <span style={{ color: "rgba(255,255,255,0.7)", fontSize: "0.68rem", fontWeight: 600 }}>All Projects</span>
+            </button>
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex-1 min-w-0">
+                <p style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.6rem", letterSpacing: "0.13em", textTransform: "uppercase", marginBottom: 2 }}>Tree Map</p>
+                <h1 style={{ color: "white", fontSize: "1.18rem", fontWeight: 800, lineHeight: 1.2 }}>{project.name}</h1>
+                <div className="flex items-center gap-2 mt-1 flex-wrap">
+                  <span style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.67rem", fontFamily: "monospace" }}>{project.reference}</span>
+                  <span className="px-1.5 py-0.5 rounded-full" style={{
+                    background: project.status === "active" ? "#16A34A" : project.status === "monitoring" ? "#D97706" : "#6B7280",
+                    color: "white", fontSize: "0.58rem", fontWeight: 700,
+                  }}>
+                    {project.status.toUpperCase()}
+                  </span>
+                </div>
+              </div>
+              <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
+                {!loadingTrees && stats.notCompliant > 0 && (
+                  <div className="flex items-center gap-1 px-2 py-1 rounded-full" style={{ background: "#DC2626" }}>
+                    <AlertCircle size={10} color="white" />
+                    <span style={{ color: "white", fontSize: "0.63rem", fontWeight: 700 }}>{stats.notCompliant} Non-Compliant</span>
+                  </div>
+                )}
+                <div className="flex items-center gap-1 px-2 py-1 rounded-full" style={{ background: "rgba(255,255,255,0.12)" }}>
+                  <span style={{ color: "rgba(255,255,255,0.8)", fontSize: "0.63rem" }}>
+                    {loadingTrees ? "Loading…" : hasTreeData ? `${stats.total} trees` : "No data"}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ── Live Leaflet Map ─────────────────────────────────────────────────── */}
+      <div className="relative" style={{ flexShrink: 0 }}>
+        <div ref={mapContainerRef} style={{
+          height: mapMode === "sites" ? "62vw" : "58vw",
+          maxHeight: mapMode === "sites" ? 380 : 340,
+          minHeight: 245,
+          width: "100%",
+          background: "#e8ede0",
+          transition: "height 0.3s ease",
+        }} />
+
+        {/* Loading overlay */}
+        {mapMode === "trees" && loadingTrees && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center" style={{ zIndex: 900, background: "rgba(255,255,255,0.72)", backdropFilter: "blur(3px)" }}>
+            <div className="rounded-2xl px-5 py-4 flex flex-col items-center gap-2" style={{ background: "white", boxShadow: "0 4px 20px rgba(0,0,0,0.12)" }}>
+              <div className="rounded-full animate-spin" style={{ width: 28, height: 28, border: "3px solid #E5E7EB", borderTopColor: "#2D5A27" }} />
+              <p style={{ color: "#374151", fontSize: "0.78rem", fontWeight: 600 }}>Loading trees…</p>
+              <p style={{ color: "#9CA3AF", fontSize: "0.67rem" }}>Fetching from Supabase</p>
+            </div>
+          </div>
+        )}
+
+        {/* No-data overlay */}
+        {mapMode === "trees" && !loadingTrees && !hasTreeData && !treeError && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none" style={{ zIndex: 900 }}>
+            <div className="rounded-2xl px-5 py-4 flex flex-col items-center gap-1.5 text-center" style={{ background: "rgba(255,255,255,0.93)", backdropFilter: "blur(6px)", maxWidth: 230 }}>
+              <TreePine size={20} color="#9CA3AF" />
+              <p style={{ color: "#374151", fontSize: "0.8rem", fontWeight: 700 }}>No GPS data loaded</p>
+              <p style={{ color: "#6B7280", fontSize: "0.67rem", lineHeight: 1.4 }}>Tree survey data for this project has not yet been imported.</p>
+            </div>
+          </div>
+        )}
+
+        {/* Error overlay */}
+        {mapMode === "trees" && treeError && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none" style={{ zIndex: 900 }}>
+            <div className="rounded-2xl px-5 py-4 flex flex-col items-center gap-2 text-center" style={{ background: "rgba(255,255,255,0.95)", backdropFilter: "blur(6px)", maxWidth: 250 }}>
+              <WifiOff size={20} color="#EF4444" />
+              <p style={{ color: "#DC2626", fontSize: "0.8rem", fontWeight: 700 }}>Failed to load trees</p>
+              <p style={{ color: "#6B7280", fontSize: "0.65rem", lineHeight: 1.4 }}>{treeError}</p>
+            </div>
+          </div>
+        )}
+
+        {/* Sites hint */}
+        {mapMode === "sites" && (
+          <div className="absolute bottom-3 left-1/2 -translate-x-1/2 pointer-events-none" style={{ zIndex: 900 }}>
+            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full" style={{ background: "rgba(27,67,50,0.82)", backdropFilter: "blur(4px)" }}>
+              <MapPin size={10} color="rgba(255,255,255,0.7)" />
+              <span style={{ color: "rgba(255,255,255,0.85)", fontSize: "0.6rem", fontWeight: 600 }}>Tap a project to view trees</span>
+            </div>
+          </div>
+        )}
+
+        {/* Zoom controls */}
+        <div className="absolute top-3 right-3 flex flex-col gap-1.5" style={{ zIndex: 900 }}>
+          <button onClick={handleZoomIn} className="w-9 h-9 rounded-xl flex items-center justify-center shadow-lg" style={{ background: "rgba(255,255,255,0.95)" }}>
+            <ZoomIn size={16} color="#1B4332" />
+          </button>
+          <button onClick={handleZoomOut} className="w-9 h-9 rounded-xl flex items-center justify-center shadow-lg" style={{ background: "rgba(255,255,255,0.95)" }}>
+            <ZoomOut size={16} color="#1B4332" />
+          </button>
+          <button onClick={handleResetView} className="w-9 h-9 rounded-xl flex items-center justify-center shadow-lg" style={{ background: "rgba(255,255,255,0.95)" }}>
+            <Crosshair size={15} color="#1B4332" />
+          </button>
+        </div>
+
+        {/* Map mode tag */}
+        <div className="absolute top-0 left-0 px-2 py-1" style={{ background: "rgba(27,67,50,0.78)", backdropFilter: "blur(3px)", zIndex: 900 }}>
+          <span style={{ color: "rgba(255,255,255,0.8)", fontSize: "0.52rem", letterSpacing: "0.09em", textTransform: "uppercase" }}>
+            {mapMode === "sites" ? "OSM · Portfolio View" : "OSM · Tree Inventory"}
+          </span>
+        </div>
+
+        {/* Coordinate label */}
+        {mapMode === "trees" && (
+          <div className="absolute bottom-2.5 right-3" style={{ zIndex: 900 }}>
+            <div className="rounded px-1.5 py-0.5" style={{ background: "rgba(0,0,0,0.48)", backdropFilter: "blur(3px)" }}>
+              <span style={{ color: "rgba(255,255,255,0.7)", fontSize: "0.52rem", fontFamily: "monospace" }}>{coordLabel} · MGA94 Z55</span>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ══ SITES MODE ══════════════════════════════════════════════════════════ */}
+      {mapMode === "sites" && (
+        <>
+          {/* Portfolio stats bar */}
+          <div className="flex items-stretch" style={{ background: "#F9FAFB", borderBottom: "1px solid #F3F4F6" }}>
+            {[
+              { label: "Projects",   count: portfolio.total,        color: "#1B4332" },
+              { label: "Active",     count: portfolio.active,       color: "#16A34A" },
+              { label: "Monitoring", count: portfolio.monitoring,   color: "#D97706" },
+              { label: "Flagged",    count: portfolio.totalFlagged, color: "#EF4444" },
+            ].map((s, i) => (
+              <div key={s.label} className="flex-1 flex flex-col items-center py-2.5"
+                style={{ borderLeft: i > 0 ? "1px solid #F3F4F6" : "none" }}>
+                <span style={{ color: s.color, fontSize: "0.92rem", fontWeight: 800, lineHeight: 1 }}>{s.count}</span>
+                <span style={{ color: "#9CA3AF", fontSize: "0.52rem", marginTop: 2, textAlign: "center" }}>{s.label}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* Project list */}
+          <div className="px-4 pt-3 pb-1">
+            <p style={{ color: "#9CA3AF", fontSize: "0.6rem", fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 8 }}>
+              Projects — tap to view trees
+            </p>
+            <div className="flex flex-col gap-2">
+              {projects.map(proj => {
+                const statusColor = PROJECT_STATUS_COLOR[proj.status] ?? "#6B7280";
+                const statusBg    = PROJECT_STATUS_BG[proj.status]    ?? "#F3F4F6";
+                const isActive    = proj.id === project.id;
+                return (
+                  <button
+                    key={proj.id}
+                    onClick={() => { setSelectedProjectId(proj.id); setMapMode("trees"); }}
+                    className="w-full rounded-2xl text-left flex items-center gap-3 px-3.5 py-3 transition-all active:scale-[0.98]"
+                    style={{
+                      background: isActive ? "#F0FDF4" : "white",
+                      border:     `1.5px solid ${isActive ? "#2D6A4F" : "#F3F4F6"}`,
+                      boxShadow:  "0 1px 4px rgba(0,0,0,0.06)",
+                    }}
+                  >
+                    <div className="rounded-full flex-shrink-0 flex items-center justify-center"
+                      style={{ width: 36, height: 36, background: statusColor, border: "2.5px solid white", boxShadow: "0 2px 6px rgba(0,0,0,0.18)" }}>
+                      <span style={{ color: "white", fontSize: "8px", fontWeight: 800 }}>{PROJECT_ABBREV[proj.id] ?? "?"}</span>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5 mb-0.5">
+                        <span style={{ color: "#111827", fontSize: "0.82rem", fontWeight: 700 }} className="truncate">{proj.name}</span>
+                        {proj.flaggedTrees > 0 && (
+                          <span className="flex-shrink-0 px-1.5 py-0.5 rounded-full" style={{ background: "#FEE2E2", color: "#EF4444", fontSize: "0.58rem", fontWeight: 700 }}>
+                            {proj.flaggedTrees} ⚠
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span style={{ color: "#9CA3AF", fontSize: "0.65rem" }}>{proj.totalTrees} trees</span>
+                        <span className="px-1.5 py-0.5 rounded-full" style={{ background: statusBg, color: statusColor, fontSize: "0.56rem", fontWeight: 700 }}>
+                          {proj.status}
+                        </span>
+                        {projectsWithData.has(proj.id) ? (
+                          <span className="flex items-center gap-0.5">
+                            <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#4ADE80", display: "inline-block" }} />
+                            <span style={{ color: "#15803D", fontSize: "0.58rem", fontWeight: 600 }}>GPS data</span>
+                          </span>
+                        ) : (
+                          <span style={{ color: "#D1D5DB", fontSize: "0.58rem" }}>No GPS yet</span>
+                        )}
+                      </div>
+                    </div>
+                    <ChevronRight size={15} color="#9CA3AF" className="flex-shrink-0" />
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Note */}
+          <div className="mx-4 mt-3 mb-1 rounded-2xl px-4 py-3 flex items-start gap-2.5" style={{ background: "#F0FDF4", border: "1px solid #BBF7D0" }}>
+            <Info size={13} color="#15803D" style={{ flexShrink: 0, marginTop: 1 }} />
+            <p style={{ color: "#15803D", fontSize: "0.68rem", lineHeight: 1.45 }}>
+              {projectsWithData.size > 0
+                ? <><span style={{ fontWeight: 700 }}>{projectsWithData.size} of {portfolio.total} project{portfolio.total !== 1 ? "s" : ""}</span> have GPS tree data. Green dots = confirmed survey.</>
+                : <>Tap a project to load GPS tree data. Projects with data show a <span style={{ fontWeight: 700, color: "#16A34A" }}>green dot</span>.</>
+              }
+            </p>
+          </div>
+        </>
+      )}
+
+      {/* ══ TREES MODE ══════════════════════════════════════════════════════════ */}
+      {mapMode === "trees" && (
+        <>
+          {/* Search bar */}
+          <div className="px-4 pt-3 pb-2.5" style={{ background: "white", borderBottom: "1px solid #F3F4F6" }}>
+            <div className="relative">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2" color="#9CA3AF" />
+              <input
+                type="text"
+                placeholder="Search by Tree ID or species…"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                disabled={loadingTrees}
+                className="w-full pl-9 pr-9 py-2.5 rounded-xl outline-none"
+                style={{ background: "#F9FAFB", border: "1.5px solid #E5E7EB", color: "#111827", fontSize: "0.8rem", opacity: loadingTrees ? 0.5 : 1 }}
+              />
+              {search && (
+                <button onClick={() => setSearch("")} className="absolute right-2.5 top-1/2 -translate-y-1/2 p-0.5 rounded-full" style={{ background: "#E5E7EB" }}>
+                  <X size={12} color="#6B7280" />
+                </button>
+              )}
+            </div>
+            {searchActive && (
+              <p style={{ color: "#6B7280", fontSize: "0.68rem", marginTop: 5 }}>
+                <span style={{ color: "#1B4332", fontWeight: 700 }}>{filteredTrees.length}</span>{" "}
+                match{filteredTrees.length !== 1 ? "es" : ""} — non-matching markers dimmed
+              </p>
+            )}
+          </div>
+
+          {/* Controls panel */}
+          <div style={{ background: "white", borderBottom: "1px solid #F3F4F6" }}>
+            <button onClick={() => setShowControls(v => !v)} className="w-full flex items-center justify-between px-4 py-3">
+              <div className="flex items-center gap-2">
+                <SlidersHorizontal size={14} color="#374151" />
+                <span style={{ color: "#374151", fontSize: "0.78rem", fontWeight: 700 }}>Tree Controls</span>
+                {modified && <span className="px-1.5 py-0.5 rounded-full" style={{ background: "#DCFCE7", color: "#15803D", fontSize: "0.58rem", fontWeight: 700 }}>Modified</span>}
+              </div>
+              {showControls ? <ChevronUp size={15} color="#9CA3AF" /> : <ChevronDown size={15} color="#9CA3AF" />}
+            </button>
+
+            {showControls && (
+              <div className="px-4 pb-4 flex flex-col gap-4" style={{ borderTop: "1px solid #F9FAFB" }}>
+                <ChipSelect
+                  label="Compliance Filter"
+                  value={statusFilter}
+                  onChange={setStatusFilter}
+                  options={[
+                    { value: "all",           label: "All" },
+                    { value: "compliant",     label: "Compliant" },
+                    { value: "not-compliant", label: "Not Compliant" },
+                  ]}
+                />
+                <ChipSelect
+                  label="Symbology"
+                  value={symbology}
+                  onChange={setSymbology}
+                  options={[
+                    { value: "none", label: "None" },
+                    { value: "nrz",  label: "NRZ" },
+                    { value: "srz",  label: "SRZ" },
+                    { value: "dsh",  label: "DSH" },
+                  ]}
+                />
+                {symbology !== "none" && (
+                  <div className="rounded-xl px-3 py-2 flex items-start gap-2" style={{ background: "#F0FDF4", border: "1px solid #BBF7D0" }}>
+                    <Info size={13} color="#15803D" style={{ flexShrink: 0, marginTop: 1 }} />
+                    <p style={{ color: "#15803D", fontSize: "0.68rem", lineHeight: 1.4 }}>
+                      {symbology === "nrz" && "NRZ — Notional Root Zone ring at real scale (metres)"}
+                      {symbology === "srz" && "SRZ — Structural Root Zone ring at real scale (metres)"}
+                      {symbology === "dsh" && "DSH — marker size scales proportionally to stem diameter"}
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Compliance stats bar */}
+          <div className="flex items-stretch" style={{ background: "#F9FAFB", borderBottom: "1px solid #F3F4F6" }}>
+            {loadingTrees ? (
+              <div className="flex-1 flex items-center justify-center py-3">
+                <span style={{ color: "#9CA3AF", fontSize: "0.72rem" }}>Loading…</span>
+              </div>
+            ) : (
+              [
+                { label: "Compliant",     count: stats.compliant,    color: "#16A34A" },
+                { label: "Not Compliant", count: stats.notCompliant, color: "#DC2626" },
+                { label: "Total",         count: stats.total,        color: "#374151" },
+              ].map((s, i) => (
+                <div key={s.label} className="flex-1 flex flex-col items-center py-2.5" style={{ borderLeft: i > 0 ? "1px solid #F3F4F6" : "none" }}>
+                  <span style={{ color: s.color, fontSize: "0.92rem", fontWeight: 800, lineHeight: 1 }}>{s.count}</span>
+                  <span style={{ color: "#9CA3AF", fontSize: "0.56rem", marginTop: 2, textAlign: "center" }}>{s.label}</span>
+                </div>
+              ))
+            )}
+          </div>
+
+          {/* Error */}
+          {treeError && (
+            <div className="mx-4 mt-3 rounded-2xl px-4 py-4 flex items-start gap-3" style={{ background: "#FEF2F2", border: "1px solid #FECACA" }}>
+              <WifiOff size={15} color="#DC2626" style={{ flexShrink: 0, marginTop: 1 }} />
+              <div>
+                <p style={{ color: "#991B1B", fontSize: "0.78rem", fontWeight: 700, marginBottom: 2 }}>Failed to load trees</p>
+                <p style={{ color: "#B91C1C", fontSize: "0.7rem", lineHeight: 1.4 }}>{treeError}</p>
+              </div>
+            </div>
+          )}
+
+          {/* No GPS */}
+          {!loadingTrees && !treeError && !hasTreeData && (
+            <div className="mx-4 mt-3 rounded-2xl px-4 py-5 flex items-start gap-3" style={{ background: "#FFF7ED", border: "1px solid #FED7AA" }}>
+              <Info size={15} color="#D97706" style={{ flexShrink: 0, marginTop: 1 }} />
+              <div>
+                <p style={{ color: "#92400E", fontSize: "0.78rem", fontWeight: 700, marginBottom: 2 }}>No tree data for this project</p>
+                <p style={{ color: "#B45309", fontSize: "0.7rem", lineHeight: 1.4 }}>
+                  GPS survey data for <span style={{ fontWeight: 700 }}>{project.name}</span> has not yet been imported.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Selected tree card — tap "View Details" to open tree detail page */}
+          {selectedTree && (
+            <div className="mx-4 mt-3 rounded-2xl overflow-hidden" style={{ boxShadow: "0 4px 18px rgba(0,0,0,0.10)", border: "1.5px solid #F3F4F6" }}>
+
+              {/* Compliance colour bar */}
+              <div style={{ height: 4, background: complianceColor(selectedTree.uiStatus) }} />
+
+              <div className="p-4" style={{ background: "white" }}>
+                {/* Header row */}
+                <div className="flex items-start justify-between gap-3 mb-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap mb-1">
+                      <span className="px-2 py-0.5 rounded-lg flex-shrink-0"
+                        style={{ background: "#1B4332", color: "white", fontSize: "0.7rem", fontWeight: 800 }}>
+                        {selectedTree.id}
+                      </span>
+                      <span className="px-2 py-0.5 rounded-full flex-shrink-0"
+                        style={{
+                          background: complianceBg(selectedTree.uiStatus),
+                          color: complianceColor(selectedTree.uiStatus),
+                          fontSize: "0.66rem", fontWeight: 700,
+                        }}>
+                        {complianceLabel(selectedTree.uiStatus)}
+                      </span>
+                    </div>
+                    <p style={{ color: "#111827", fontSize: "0.88rem", fontWeight: 700, fontStyle: "italic", lineHeight: 1.25 }}>
+                      {selectedTree.botanicalName}
+                    </p>
+                  </div>
+                  <button onClick={() => setSelectedTree(null)} className="p-2 rounded-full flex-shrink-0" style={{ background: "#F3F4F6" }}>
+                    <X size={13} color="#6B7280" />
+                  </button>
+                </div>
+
+                {/* NRZ / SRZ / Location */}
+                <div className="flex rounded-xl overflow-hidden mb-3" style={{ background: "#F9FAFB", border: "1px solid #F3F4F6" }}>
+                  {[
+                    { label: "NRZ",      value: `${selectedTree.nrzRadius} m` },
+                    { label: "SRZ",      value: selectedTree.srzRadius ? `${selectedTree.srzRadius} m` : "N/A" },
+                    { label: "Location", value: selectedTree.location },
+                  ].map((item, i) => (
+                    <div key={item.label} className="flex-1 flex flex-col items-center py-2.5" style={{ borderLeft: i > 0 ? "1px solid #F3F4F6" : "none" }}>
+                      <span style={{ color: "#9CA3AF", fontSize: "0.58rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>{item.label}</span>
+                      <span style={{ color: "#111827", fontSize: "0.72rem", fontWeight: 700, marginTop: 2, textAlign: "center" }}>{item.value}</span>
+                    </div>
+                  ))}
+                </div>
+
+                {/* TPM measures if set */}
+                {selectedTree.treeProtectionMeasures && (
+                  <div className="flex items-start gap-2 rounded-xl px-3 py-2 mb-3" style={{ background: "#F0FDF4", border: "1px solid #BBF7D0" }}>
+                    <TreePine size={12} color="#15803D" style={{ flexShrink: 0, marginTop: 1 }} />
+                    <span style={{ color: "#374151", fontSize: "0.7rem", lineHeight: 1.5 }}>
+                      <strong style={{ color: "#15803D" }}>Measures: </strong>{selectedTree.treeProtectionMeasures}
+                    </span>
+                  </div>
+                )}
+
+                {/* Coordinates */}
+                <div className="flex items-center gap-2 rounded-xl px-3 py-2 mb-3" style={{ background: "#F9FAFB", border: "1px solid #F3F4F6" }}>
+                  <span style={{ color: "#9CA3AF", fontSize: "0.67rem", fontFamily: "monospace" }}>
+                    {selectedTree.latitude.toFixed(6)}, {selectedTree.longitude.toFixed(6)}
+                  </span>
+                </div>
+
+                {/* Actions */}
+                <button
+                  onClick={() => navigate(`/trees/${selectedTree.id}`)}
+                  className="w-full py-3 rounded-xl flex items-center justify-center gap-1.5 active:scale-[0.98] transition-transform"
+                  style={{ background: "linear-gradient(135deg, #1B4332 0%, #2D6A4F 100%)" }}
+                >
+                  <span style={{ color: "white", fontSize: "0.85rem", fontWeight: 700 }}>Open Tree Detail</span>
+                  <ChevronRight size={15} color="white" />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Legend */}
+          <div className="mx-4 mt-3 rounded-2xl overflow-hidden" style={{ border: "1.5px solid #F3F4F6", background: "white" }}>
+            <button onClick={() => setShowLegend(v => !v)} className="w-full flex items-center justify-between px-4 py-3">
+              <span style={{ color: "#374151", fontSize: "0.75rem", fontWeight: 600 }}>
+                Legend — Compliance{symbology !== "none" && ` + ${symbology.toUpperCase()}`}
+              </span>
+              {showLegend ? <ChevronUp size={14} color="#9CA3AF" /> : <ChevronDown size={14} color="#9CA3AF" />}
+            </button>
+            {showLegend && (
+              <div className="px-4 pb-4 pt-1" style={{ borderTop: "1px solid #F9FAFB" }}>
+                <div className="flex flex-col gap-2.5 mb-3">
+                  {LEGEND_ITEMS.map(item => (
+                    <div key={item.label} className="flex items-center gap-2.5">
+                      <div className="rounded-full flex-shrink-0" style={{ width: 9, height: 9, background: item.color }} />
+                      <span style={{ color: "#374151", fontSize: "0.73rem" }}>{item.label}</span>
+                    </div>
+                  ))}
+                </div>
+                {symbology !== "none" && (
+                  <>
+                    <div style={{ height: 1, background: "#F3F4F6", margin: "4px 0 10px" }} />
+                    <div className="flex items-center gap-2.5">
+                      <div className="rounded-full flex-shrink-0" style={{ width: 13, height: 13, border: "1.5px dashed #6B7280", background: "rgba(107,114,128,0.12)" }} />
+                      <span style={{ color: "#374151", fontSize: "0.72rem" }}>
+                        {symbology === "nrz" ? "NRZ — real scale" : symbology === "srz" ? "SRZ — real scale" : "DSH — dot = stem diameter"}
+                      </span>
+                    </div>
+                  </>
+                )}
+                <div style={{ height: 1, background: "#F9FAFB", margin: "10px 0 8px" }} />
+                <span style={{ color: "#9CA3AF", fontSize: "0.65rem" }}>
+                  {hasTreeData ? `${stats.total} trees · compliance based on encroachment class` : "No tree data for this project"}
+                </span>
+              </div>
+            )}
+          </div>
+
+          {/* Search results list */}
+          {searchActive && filteredTrees.length > 0 && (
+            <div className="px-4 mt-3">
+              <p style={{ color: "#6B7280", fontSize: "0.62rem", fontWeight: 700, letterSpacing: "0.09em", textTransform: "uppercase", marginBottom: 6 }}>
+                {filteredTrees.length} result{filteredTrees.length !== 1 ? "s" : ""}
+              </p>
+              <div className="flex flex-col gap-1.5">
+                {filteredTrees.slice(0, 8).map(tree => {
+                  const color      = complianceColor(tree.uiStatus);
+                  const isSelected = selectedTree?.id === tree.id;
+                  return (
+                    <button
+                      key={tree.id}
+                      onClick={() => handleTreeSelect(tree)}
+                      className="w-full rounded-xl text-left flex items-center gap-3 px-3 py-2.5 transition-all active:scale-[0.98]"
+                      style={{
+                        background: isSelected ? "#F0FDF4" : "white",
+                        border:     `1.5px solid ${isSelected ? "#2D6A4F" : "#F3F4F6"}`,
+                        boxShadow:  "0 1px 3px rgba(0,0,0,0.05)",
+                      }}
+                    >
+                      <div className="rounded-full flex-shrink-0" style={{ width: 9, height: 9, background: color }} />
+                      <span className="flex-shrink-0 px-1.5 py-0.5 rounded-md"
+                        style={{ background: "#1B4332", color: "white", fontSize: "0.6rem", fontWeight: 800 }}>
+                        {tree.id}
+                      </span>
+                      <span className="flex-1 truncate" style={{ color: "#374151", fontSize: "0.78rem", fontStyle: "italic" }}>
+                        {tree.botanicalName}
+                      </span>
+                      <span className="flex-shrink-0 px-1.5 py-0.5 rounded-full"
+                        style={{ background: complianceBg(tree.uiStatus), color, fontSize: "0.6rem", fontWeight: 700 }}>
+                        {complianceLabel(tree.uiStatus)}
+                      </span>
+                    </button>
+                  );
+                })}
+                {filteredTrees.length > 8 && (
+                  <p style={{ color: "#9CA3AF", fontSize: "0.68rem", textAlign: "center", paddingTop: 4 }}>
+                    + {filteredTrees.length - 8} more — refine your search
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {searchActive && filteredTrees.length === 0 && !loadingTrees && (
+            <div className="mx-4 mt-3 rounded-2xl px-4 py-6 flex flex-col items-center gap-2 text-center" style={{ background: "#F9FAFB", border: "1px solid #F3F4F6" }}>
+              <Search size={22} color="#D1D5DB" />
+              <p style={{ color: "#6B7280", fontSize: "0.82rem" }}>No trees match "{search}"</p>
+              <p style={{ color: "#9CA3AF", fontSize: "0.72rem" }}>Try a Tree ID (e.g. T001) or species name</p>
+            </div>
+          )}
+        </>
+      )}
+
+      <div style={{ height: 16 }} />
+    </div>
+  );
+}
