@@ -570,8 +570,24 @@ export function NewVisitPage() {
     setIsSaving(true);
     try {
       console.log("selected project for visit", project);
+
+      const projectUuid = project.uuid
+        ? project.uuid
+        : await supabase
+            .from("projects")
+            .select("id")
+            .eq("slug", project.id)
+            .single()
+            .then(({ data, error }) => {
+              if (error) throw error;
+              if (!data?.id) {
+                throw new Error("Unable to resolve project UUID for visit save.");
+              }
+              return data.id;
+            });
+
       const payload = {
-        project_id: project.id,
+        project_id: projectUuid,
         tree_id: null,
         visit_type: visitType,
         inspection_date: date,
