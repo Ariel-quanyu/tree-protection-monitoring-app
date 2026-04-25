@@ -11,6 +11,7 @@ import {
 import { useProject } from "../../context/ProjectContext";
 import { supabase } from "../../../lib/supabase";
 import { mapSupabaseTree, type SupabaseTree } from "../../data/treeMapper";
+import { createVisit } from "../../data/visitsApi";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -506,6 +507,8 @@ export function NewVisitPage() {
   const [visitNotes,  setVisitNotes]  = useState("");
   const [records,     setRecords]     = useState<TreeRecord[]>([]);
   const [loadingTrees, setLoadingTrees] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [submitError, setSubmitError] = useState("");
 
   // Fetch trees when project/step changes
   useEffect(() => {
@@ -548,9 +551,47 @@ export function NewVisitPage() {
   const breachCount     = records.filter(r => !r.noChange && r.tpmStatus === "not-compliant").length;
   const canNext1 = visitType !== "" && inspector.trim() !== "" && date !== "";
 
-  const handleComplete = () => {
-    // In a real app this would POST to Supabase
-    navigate("/visits");
+  const handleComplete = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setSubmitError("");
+    if (!project) {
+      const message = "No project selected. Please choose a project before saving.";
+      setSubmitError(message);
+      console.error("Failed to save visit:", message);
+      return;
+    }
+
+    console.info("Submitting visit payload", {
+      projectId: project.uuid,
+      date,
+      visitType,
+      records: records.length,
+    });
+
+    setIsSaving(true);
+    try {
+      await createVisit({
+        projectUuid: project.uuid,
+        inspectionDate: date,
+        visitType: visitType as VisitType,
+        inspectorName: inspector.trim(),
+        notes: visitNotes.trim(),
+      });
+
+      navigate("/visits", { replace: true, state: { refreshVisitsAt: Date.now() } });
+    } catch (error) {
+      const message =
+        typeof error === "object" &&
+        error !== null &&
+        "message" in error &&
+        typeof (error as { message?: unknown }).message === "string"
+          ? (error as { message: string }).message
+          : "Failed to save visit.";
+      console.error("Supabase insert into visits failed:", error);
+      setSubmitError(message);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -771,7 +812,7 @@ export function NewVisitPage() {
 
         {/* ── STEP 3: Review ── */}
         {step === 3 && (
-          <>
+          <form onSubmit={handleComplete} className="flex flex-col gap-4">
             <ReviewStep
               visitType={visitType as VisitType}
               inspector={inspector}
@@ -781,25 +822,37 @@ export function NewVisitPage() {
               projectName={project?.name ?? ""}
             />
 
+            {submitError && (
+              <div
+                role="alert"
+                className="rounded-xl px-4 py-3"
+                style={{ background: "#FEF2F2", border: "1px solid #FECACA", color: "#B91C1C", fontSize: "0.78rem" }}
+              >
+                Failed to save visit: {submitError}
+              </div>
+            )}
+
             <button
-              onClick={handleComplete}
+              type="submit"
+              disabled={isSaving}
               className="w-full py-4 rounded-2xl flex items-center justify-center gap-2 active:scale-[0.98] transition-all"
-              style={{ background: "#1B4332" }}
+              style={{ background: isSaving ? "#6B7280" : "#1B4332" }}
             >
               <CheckCircle2 size={18} color="white" />
               <span style={{ color: "white", fontSize: "0.92rem", fontWeight: 700 }}>
-                Complete Visit
+                {isSaving ? "Saving…" : "Complete Visit"}
               </span>
             </button>
 
             <button
+              type="button"
               onClick={() => navigate("/visits")}
               className="w-full py-3.5 rounded-2xl flex items-center justify-center active:opacity-70 transition-opacity"
               style={{ background: "white", border: "1.5px solid #E5E7EB" }}
             >
               <span style={{ color: "#6B7280", fontSize: "0.85rem" }}>Save as Draft</span>
             </button>
-          </>
+          </form>
         )}
       </div>
     </div>

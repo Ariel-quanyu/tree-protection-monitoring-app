@@ -1,5 +1,5 @@
-import React, { useState, useMemo } from "react";
-import { useNavigate } from "react-router";
+import React, { useState, useMemo, useEffect } from "react";
+import { useNavigate, useLocation } from "react-router";
 import {
   ClipboardCheck, ChevronRight, AlertCircle, CheckCircle2,
   Clock, Calendar, User, Trees, X, Filter,
@@ -12,6 +12,7 @@ import {
   type VisitType,
 } from "../../data/visitsData";
 import { useProject } from "../../context/ProjectContext";
+import { fetchVisits } from "../../data/visitsApi";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -161,23 +162,55 @@ type StatusFilter = "all" | "draft" | "completed";
 
 export function VisitsPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { projects, selectedProjectId } = useProject();
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [projectFilter, setProjectFilter] = useState<string>("all");
+  const [visits, setVisits] = useState<Visit[]>(MOCK_VISITS);
+  const [loadingVisits, setLoadingVisits] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    setLoadingVisits(true);
+    fetchVisits()
+      .then((data) => {
+        if (!mounted) return;
+        const hydrated = data.map((visit) => {
+          const projectMatch = projects.find((p) => p.uuid === visit.projectId);
+          if (!projectMatch) return visit;
+          return {
+            ...visit,
+            projectId: projectMatch.id,
+            projectName: projectMatch.name,
+          };
+        });
+        setVisits(hydrated);
+      })
+      .catch((error) => {
+        console.error("Failed to fetch visits from Supabase:", error);
+      })
+      .finally(() => {
+        if (mounted) setLoadingVisits(false);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [location.state, projects]);
 
   const filtered = useMemo(() => {
-    return MOCK_VISITS
+    return visits
       .filter(v => {
         if (statusFilter !== "all" && v.status !== statusFilter) return false;
         if (projectFilter !== "all" && v.projectId !== projectFilter) return false;
         return true;
       })
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  }, [statusFilter, projectFilter]);
+  }, [visits, statusFilter, projectFilter]);
 
-  const totalBreaches = MOCK_VISITS.reduce((s, v) => s + v.breachCount, 0);
-  const totalCompleted = MOCK_VISITS.filter(v => v.status === "completed").length;
-  const totalDraft     = MOCK_VISITS.filter(v => v.status === "draft").length;
+  const totalBreaches = visits.reduce((s, v) => s + v.breachCount, 0);
+  const totalCompleted = visits.filter(v => v.status === "completed").length;
+  const totalDraft     = visits.filter(v => v.status === "draft").length;
 
   return (
     <div className="pb-32">
@@ -197,7 +230,7 @@ export function VisitsPage() {
         {/* Summary pills */}
         <div className="flex gap-2 mt-3">
           {[
-            { label: "Visits", value: MOCK_VISITS.length, bg: "rgba(255,255,255,0.15)", text: "white" },
+            { label: "Visits", value: visits.length, bg: "rgba(255,255,255,0.15)", text: "white" },
             { label: "Complete", value: totalCompleted,  bg: "rgba(74,222,128,0.2)",  text: "#4ADE80" },
             { label: "Draft",    value: totalDraft,      bg: "rgba(251,191,36,0.2)",  text: "#FCD34D" },
             { label: "Breaches", value: totalBreaches,   bg: "rgba(248,113,113,0.2)", text: "#FCA5A5" },
@@ -290,7 +323,14 @@ export function VisitsPage() {
 
       {/* Visit list */}
       <div className="px-4 flex flex-col gap-2.5">
-        {filtered.length === 0 ? (
+        {loadingVisits ? (
+          <div className="rounded-2xl px-4 py-10 flex flex-col items-center gap-3 text-center"
+            style={{ background: "#F9FAFB", border: "1px dashed #E5E7EB" }}>
+            <p style={{ color: "#6B7280", fontSize: "0.85rem", fontWeight: 500 }}>
+              Loading visits…
+            </p>
+          </div>
+        ) : filtered.length === 0 ? (
           <div className="rounded-2xl px-4 py-10 flex flex-col items-center gap-3 text-center"
             style={{ background: "#F9FAFB", border: "1px dashed #E5E7EB" }}>
             <ClipboardCheck size={32} color="#D1D5DB" />
