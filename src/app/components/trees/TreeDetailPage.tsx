@@ -10,7 +10,7 @@ import { useSelectedProject } from "../../context/ProjectContext";
 import { EncroachmentBadge } from "../StatusBadge";
 import { type SupabaseTree, mapSupabaseTree } from "../../data/treeMapper";
 import {
-  MOCK_VISITS, VISIT_TYPE_SHORT, VISIT_TYPE_COLORS,
+  VISIT_TYPE_SHORT, VISIT_TYPE_COLORS, type VisitType,
 } from "../../data/visitsData";
 
 // ── Observation types ─────────────────────────────────────────────────────────
@@ -20,6 +20,23 @@ type ObsSeverity = "low" | "medium" | "high" | "critical";
 interface EmbeddedObs {
   id?: string; type: string; severity: ObsSeverity;
   description: string; date: string; inspector: string; resolved?: boolean;
+}
+
+interface TreeVisitRecord {
+  id: string;
+  visit_id: string;
+  project_id: string;
+  tree_id: string;
+  tpm_status: "compliant" | "not-compliant" | null;
+  health: string | null;
+  damage: string | null;
+  notes: string | null;
+  created_at: string;
+  visits?: {
+    id: string;
+    visit_type: string | null;
+    inspection_date: string | null;
+  } | null;
 }
 
 function parseObservations(raw: unknown): EmbeddedObs[] {
@@ -330,6 +347,8 @@ export function TreeDetailPage() {
   const [activeTab,  setActiveTab]  = useState<"compliance" | "info" | "history">("compliance");
   const [tree,       setTree]       = useState<SupabaseTree | null>(null);
   const [treeObs,    setTreeObs]    = useState<EmbeddedObs[]>([]);
+  const [historyRecords, setHistoryRecords] = useState<TreeVisitRecord[]>([]);
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const [loading,    setLoading]    = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [tpmStatus,  setTpmStatus]  = useState<TPMStatus>("compliant");
@@ -368,6 +387,32 @@ export function TreeDetailPage() {
     return () => { cancelled = true; };
   }, [project?.uuid, routeTreeId]);
 
+  useEffect(() => {
+    const projectUuid = project?.uuid;
+    if (!projectUuid || !routeTreeId) return;
+    let cancelled = false;
+
+    setHistoryError(null);
+
+    supabase
+      .from("tree_visit_records")
+      .select("id, visit_id, project_id, tree_id, tpm_status, health, damage, notes, created_at, visits(id, visit_type, inspection_date)")
+      .eq("project_id", projectUuid)
+      .eq("tree_id", routeTreeId)
+      .order("created_at", { ascending: false })
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        if (error) {
+          setHistoryError(error.message);
+          setHistoryRecords([]);
+          return;
+        }
+        setHistoryRecords((data ?? []) as TreeVisitRecord[]);
+      });
+
+    return () => { cancelled = true; };
+  }, [project?.uuid, routeTreeId]);
+
   if (!project || loading) return <LoadingSkeleton />;
 
   if (fetchError) {
@@ -401,11 +446,6 @@ export function TreeDetailPage() {
   const encBg     = ENC_BG[tree.encroachmentClass];
   const hasEnc    = tree.encroachmentClass !== "None" ||
     (tree.nrzEncroachment !== "None" && tree.nrzEncroachment !== "");
-
-  // Find visits that inspected this tree
-  const relevantVisits = MOCK_VISITS.filter(v =>
-    v.treeInspections.some(ti => ti.treeId === tree.id)
-  ).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
   // TPM status display
   const tpmDisplay = {
@@ -473,7 +513,7 @@ export function TreeDetailPage() {
           { label: "NRZ",      value: `${tree.nrzRadius} m` },
           { label: "SRZ",      value: tree.srzRadius != null ? `${tree.srzRadius} m` : "—" },
           { label: "Class",    value: tree.encroachmentClass, color: encColor },
-          { label: "Visits",   value: String(relevantVisits.length) },
+          { label: "Visits",   value: String(historyRecords.length) },
         ].map(({ label, value, color }) => (
           <div key={label} className="flex flex-col items-center gap-0.5 px-1">
             <span style={{ color: color ?? "#1B4332", fontSize: "0.88rem", fontWeight: 700, textAlign: "center" }}>
@@ -497,7 +537,7 @@ export function TreeDetailPage() {
               borderRadius: "0.75rem",
             }}
           >
-            {tab === "history" ? `History (${relevantVisits.length})` : tab.charAt(0).toUpperCase() + tab.slice(1)}
+            {tab === "history" ? `History (${historyRecords.length})` : tab.charAt(0).toUpperCase() + tab.slice(1)}
           </button>
         ))}
       </div>
@@ -629,7 +669,17 @@ export function TreeDetailPage() {
         {/* ── History tab ── */}
         {activeTab === "history" && (
           <div className="flex flex-col gap-3 pb-4">
-            {relevantVisits.length === 0 ? (
+            {historyError ? (
+              <div className="rounded-2xl px-4 py-6 flex flex-col gap-2 text-center"
+                style={{ background: "#FEF2F2", border: "1px solid #FECACA" }}>
+                <p style={{ color: "#B91C1C", fontSize: "0.85rem", fontWeight: 700 }}>
+                  Failed to load tree visit history
+                </p>
+                <p style={{ color: "#991B1B", fontSize: "0.75rem", lineHeight: 1.5 }}>
+                  {historyError}
+                </p>
+              </div>
+            ) : historyRecords.length === 0 ? (
               <div className="rounded-2xl px-4 py-10 flex flex-col items-center gap-3 text-center"
                 style={{ background: "#F9FAFB", border: "1px dashed #E5E7EB" }}>
                 <ClipboardList size={30} color="#D1D5DB" />
@@ -651,15 +701,18 @@ export function TreeDetailPage() {
                 </button>
               </div>
             ) : (
-              relevantVisits.map(v => {
-                const insp   = v.treeInspections.find(ti => ti.treeId === tree.id);
-                const cfg    = VISIT_TYPE_COLORS[v.type];
-                const isBreach = insp?.tpmCompliance === "not-compliant";
+              historyRecords.map((record) => {
+                const visitTypeRaw = record.visits?.visit_type ?? "Routine Visit";
+                const visitType = (visitTypeRaw in VISIT_TYPE_SHORT
+                  ? visitTypeRaw
+                  : "Routine Visit") as VisitType;
+                const cfg = VISIT_TYPE_COLORS[visitType];
+                const isBreach = record.tpm_status === "not-compliant";
+                const eventDate = record.visits?.inspection_date ?? record.created_at;
                 return (
-                  <button
-                    key={v.id}
-                    onClick={() => navigate(`/visits/${v.id}`)}
-                    className="w-full rounded-2xl p-4 text-left active:scale-[0.985] transition-transform"
+                  <div
+                    key={record.id}
+                    className="w-full rounded-2xl p-4 text-left"
                     style={{
                       background: "white",
                       border: `1.5px solid ${isBreach ? "#FECACA" : "#F3F4F6"}`,
@@ -672,16 +725,16 @@ export function TreeDetailPage() {
                           <span className="rounded-lg px-2 py-0.5"
                             style={{ background: cfg.bg, border: `1px solid ${cfg.border}` }}>
                             <span style={{ color: cfg.text, fontSize: "0.6rem", fontWeight: 700 }}>
-                              {VISIT_TYPE_SHORT[v.type]}
+                              {VISIT_TYPE_SHORT[visitType]}
                             </span>
                           </span>
                           <span style={{ color: "#9CA3AF", fontSize: "0.68rem" }}>
-                            {new Date(v.date).toLocaleDateString("en-AU",
+                            {new Date(eventDate).toLocaleDateString("en-AU",
                               { day: "numeric", month: "short", year: "numeric" })}
                           </span>
                         </div>
-                        {insp && !insp.noChange && (
-                          <div className="flex flex-wrap gap-1.5 mt-1">
+                        <div className="flex flex-wrap gap-1.5 mt-1">
+                          {record.tpm_status && (
                             <span className="rounded-full px-2 py-0.5"
                               style={{
                                 background: isBreach ? "#FEE2E2" : "#DCFCE7",
@@ -690,37 +743,32 @@ export function TreeDetailPage() {
                               }}>
                               {isBreach ? "Not Compliant" : "Compliant"}
                             </span>
-                            {insp.health && (
-                              <span className="rounded-full px-2 py-0.5"
-                                style={{ background: "#F3F4F6", color: "#374151",
-                                  fontSize: "0.65rem" }}>
-                                Health: {insp.health}
-                              </span>
-                            )}
-                            {insp.damage === "Yes" && (
-                              <span className="rounded-full px-2 py-0.5"
-                                style={{ background: "#FEE2E2", color: "#DC2626",
-                                  fontSize: "0.65rem", fontWeight: 600 }}>
-                                Damage
-                              </span>
-                            )}
-                          </div>
-                        )}
-                        {insp?.noChange && (
-                          <span style={{ color: "#9CA3AF", fontSize: "0.72rem" }}>
-                            Inherited from previous visit — no new observations recorded
-                          </span>
-                        )}
-                        {insp?.notes && (
+                          )}
+                          {record.health && (
+                            <span className="rounded-full px-2 py-0.5"
+                              style={{ background: "#F3F4F6", color: "#374151",
+                                fontSize: "0.65rem" }}>
+                              Health: {record.health}
+                            </span>
+                          )}
+                          {record.damage === "Yes" && (
+                            <span className="rounded-full px-2 py-0.5"
+                              style={{ background: "#FEE2E2", color: "#DC2626",
+                                fontSize: "0.65rem", fontWeight: 600 }}>
+                              Damage
+                            </span>
+                          )}
+                        </div>
+                        {record.notes && (
                           <p style={{ color: "#4B5563", fontSize: "0.73rem",
                             marginTop: 6, lineHeight: 1.5 }}>
-                            {insp.notes}
+                            {record.notes}
                           </p>
                         )}
                       </div>
-                      <ChevronRight size={13} color="#D1D5DB" style={{ flexShrink: 0 }} />
+                      <ChevronRight size={13} color="#D1D5DB" style={{ flexShrink: 0, opacity: 0.5 }} />
                     </div>
-                  </button>
+                  </div>
                 );
               })
             )}
