@@ -30,6 +30,16 @@ interface TreeRecord {
 
 type Step = 1 | 2 | 3;
 
+function isTreeRecordUpdated(record: TreeRecord): boolean {
+  if (!record.noChange) return true;
+  return (
+    record.tpmStatus !== "pending" ||
+    record.health !== "" ||
+    record.damage !== "" ||
+    record.notes.trim() !== ""
+  );
+}
+
 // ── Step indicator ────────────────────────────────────────────────────────────
 
 function StepBar({ current }: { current: Step }) {
@@ -594,20 +604,50 @@ export function NewVisitPage() {
         inspector_name: inspector.trim(),
         notes: visitNotes.trim(),
       };
-      console.log("visit insert payload", payload);
+      console.log("site visit insert payload", payload);
 
-      const { error } = await supabase
+      const { data: insertedVisit, error: visitInsertError } = await supabase
         .from("visits")
-        .insert(payload);
+        .insert(payload)
+        .select("id")
+        .single();
 
-      if (error) throw error;
+      if (visitInsertError) throw visitInsertError;
+      if (!insertedVisit?.id) {
+        throw new Error("Visit was created but no visit id was returned.");
+      }
+
+      const visitId = insertedVisit.id;
+      console.log("created visit id", visitId);
+
+      const updatedTreeRecordsPayload = records
+        .filter(isTreeRecordUpdated)
+        .map((record) => ({
+          visit_id: visitId,
+          project_id: projectUuid,
+          tree_id: record.tree.id,
+          tpm_status: record.tpmStatus === "pending" ? null : record.tpmStatus,
+          health: record.health || null,
+          damage: record.damage || null,
+          notes: record.notes.trim() || null,
+        }));
+
+      console.log("updated tree records payload", updatedTreeRecordsPayload);
+
+      if (updatedTreeRecordsPayload.length > 0) {
+        const { error: treeRecordsInsertError } = await supabase
+          .from("tree_visit_records")
+          .insert(updatedTreeRecordsPayload);
+
+        if (treeRecordsInsertError) throw treeRecordsInsertError;
+      }
 
       navigate("/visits", { replace: true, state: { refreshVisitsAt: Date.now() } });
     } catch (error) {
       const message = (error && typeof error === "object" && "message" in error && typeof error.message === "string")
         ? error.message
-        : "Failed to save visit.";
-      console.error("Supabase insert into visits failed:", error);
+        : "Failed to save visit and tree history records.";
+      console.error("Supabase visit save failed:", error);
       setSubmitError(message);
     } finally {
       setIsSaving(false);
