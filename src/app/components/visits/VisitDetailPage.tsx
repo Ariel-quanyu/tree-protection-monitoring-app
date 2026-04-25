@@ -66,6 +66,7 @@ export function VisitDetailPage() {
 
       setLoadingVisit(true);
       setDeleteError("");
+      setIsDeletingVisit(false);
       try {
         const { data: visitRow, error: visitError } = await supabase
           .from("visits")
@@ -93,12 +94,16 @@ export function VisitDetailPage() {
             .eq("visit_id", id),
         ]);
 
-        if (projectError) throw projectError;
-        if (treeRecordsError) throw treeRecordsError;
+        if (projectError) {
+          console.warn("Unable to load project metadata for visit detail.", projectError);
+        }
+        if (treeRecordsError) {
+          console.warn("Unable to load tree visit records for visit detail.", treeRecordsError);
+        }
 
         const treeIds = Array.from(
           new Set(
-            (treeRecords ?? [])
+            ((treeRecords ?? []) as { tree_id: unknown }[])
               .map((record) => {
                 if (record.tree_id == null) return "";
                 return String(record.tree_id).trim();
@@ -123,7 +128,13 @@ export function VisitDetailPage() {
           }
         }
 
-        const normalizedTreeInspections: TreeInspection[] = (treeRecords ?? []).map((record) => {
+        const normalizedTreeInspections: TreeInspection[] = ((treeRecords ?? []) as {
+          tree_id: unknown;
+          tpm_status: string | null;
+          health: string | null;
+          damage: string | null;
+          notes: string | null;
+        }[]).map((record) => {
           const normalizedTreeId = record.tree_id == null ? "" : String(record.tree_id).trim();
           const treeMeta = normalizedTreeId ? treeMetaMap.get(normalizedTreeId) : null;
 
@@ -170,7 +181,7 @@ export function VisitDetailPage() {
       } catch (error) {
         console.error("Failed to fetch visit detail from Supabase:", error);
         if (!mounted) return;
-        setVisit(MOCK_VISITS.find((mockVisit) => mockVisit.id === id) ?? null);
+        setVisit(null);
         setIsRealVisit(false);
       } finally {
         if (mounted) setLoadingVisit(false);
