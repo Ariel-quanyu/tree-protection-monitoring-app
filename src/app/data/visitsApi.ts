@@ -1,5 +1,5 @@
 import { supabase } from "../../lib/supabase";
-import type { Visit, VisitStatus, VisitType } from "./visitsData";
+import type { Visit, VisitType } from "./visitsData";
 
 interface SaveVisitInput {
   projectUuid: string;
@@ -28,7 +28,7 @@ function mapVisitRow(row: Record<string, unknown>): Visit {
     date: asString(row.inspection_date ?? row.date),
     type: asString(row.visit_type ?? row.type) as VisitType,
     inspector: asString(row.inspector_name ?? row.inspector),
-    status: asString(row.status, "completed") as VisitStatus,
+    status: "completed",
     totalTrees: asNumber(row.total_trees ?? row.totalTrees),
     inspectedTrees: asNumber(row.inspected_trees ?? row.inspectedTrees),
     noChangeTrees: asNumber(row.no_change_trees ?? row.noChangeTrees),

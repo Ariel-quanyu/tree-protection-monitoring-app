@@ -163,7 +163,7 @@ type StatusFilter = "all" | "draft" | "completed";
 export function VisitsPage() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { projects, selectedProjectId } = useProject();
+  const { projects } = useProject();
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [projectFilter, setProjectFilter] = useState<string>("all");
   const [visits, setVisits] = useState<Visit[]>(MOCK_VISITS);
