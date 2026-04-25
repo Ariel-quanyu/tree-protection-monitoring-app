@@ -11,7 +11,6 @@ import {
 import { useProject } from "../../context/ProjectContext";
 import { supabase } from "../../../lib/supabase";
 import { mapSupabaseTree, type SupabaseTree } from "../../data/treeMapper";
-import { createVisit } from "../../data/visitsApi";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -570,33 +569,28 @@ export function NewVisitPage() {
 
     setIsSaving(true);
     try {
-      await createVisit({
-        projectId: project.id,
-        projectName: project.name,
-        date,
-        type: visitType as VisitType,
-        inspector: inspector.trim(),
-        status: "completed",
-        totalTrees: records.length,
-        inspectedTrees: inspectedCount,
-        noChangeTrees: records.filter(r => r.noChange).length,
-        breachCount,
+      console.log("selected project for visit", project);
+      const payload = {
+        project_id: project.id,
+        tree_id: null,
+        visit_type: visitType,
+        inspection_date: date,
+        inspector_name: inspector.trim(),
         notes: visitNotes.trim(),
-        treeInspections: records.map(r => ({
-          treeId: r.tree.id,
-          botanicalName: r.tree.botanicalName,
-          location: r.tree.location,
-          noChange: r.noChange,
-          tpmCompliance: r.tpmStatus,
-          health: r.health,
-          damage: r.damage,
-          notes: r.notes,
-        })),
-      });
+      };
+      console.log("visit insert payload", payload);
+
+      const { error } = await supabase
+        .from("visits")
+        .insert(payload);
+
+      if (error) throw error;
 
       navigate("/visits", { replace: true, state: { refreshVisitsAt: Date.now() } });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to save visit.";
+      const message = (error && typeof error === "object" && "message" in error && typeof error.message === "string")
+        ? error.message
+        : "Failed to save visit.";
       console.error("Supabase insert into visits failed:", error);
       setSubmitError(message);
     } finally {
