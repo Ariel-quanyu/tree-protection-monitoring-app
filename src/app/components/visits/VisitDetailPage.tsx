@@ -41,7 +41,10 @@ export function VisitDetailPage() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<"overview" | "trees">("overview");
   const [visit, setVisit] = useState<Visit | null>(null);
+  const [isSupabaseVisit, setIsSupabaseVisit] = useState(false);
   const [loadingVisit, setLoadingVisit] = useState(true);
+  const [deletingVisit, setDeletingVisit] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -56,11 +59,13 @@ export function VisitDetailPage() {
       if (!id) {
         if (!mounted) return;
         setVisit(null);
+        setIsSupabaseVisit(false);
         setLoadingVisit(false);
         return;
       }
 
       setLoadingVisit(true);
+      setDeleteError(null);
       try {
         const { data: visitRow, error: visitError } = await supabase
           .from("visits")
@@ -73,6 +78,7 @@ export function VisitDetailPage() {
         if (!visitRow) {
           if (!mounted) return;
           setVisit(MOCK_VISITS.find((mockVisit) => mockVisit.id === id) ?? null);
+          setIsSupabaseVisit(false);
           return;
         }
 
@@ -160,10 +166,12 @@ export function VisitDetailPage() {
 
         if (!mounted) return;
         setVisit(mappedVisit);
+        setIsSupabaseVisit(true);
       } catch (error) {
         console.error("Failed to fetch visit detail from Supabase:", error);
         if (!mounted) return;
         setVisit(MOCK_VISITS.find((mockVisit) => mockVisit.id === id) ?? null);
+        setIsSupabaseVisit(false);
       } finally {
         if (mounted) setLoadingVisit(false);
       }
@@ -204,6 +212,28 @@ export function VisitDetailPage() {
   const cfg    = VISIT_TYPE_COLORS[visit.type];
   const pct    = compliancePct(visit.inspectedTrees, visit.breachCount);
   const isDraft = visit.status === "draft";
+
+  const handleDeleteVisit = async () => {
+    if (!isSupabaseVisit || deletingVisit) return;
+
+    const confirmed = window.confirm(
+      "Delete this visit? This will remove this site visit and its tree inspection records from the app. This action cannot be undone.",
+    );
+    if (!confirmed) return;
+
+    setDeleteError(null);
+    setDeletingVisit(true);
+    try {
+      const { error } = await supabase.from("visits").delete().eq("id", visit.id);
+      if (error) throw error;
+      navigate("/visits", { replace: true, state: { refreshVisitsAt: Date.now() } });
+    } catch (error) {
+      console.error("Failed to delete visit:", error);
+      setDeleteError("Unable to delete this visit. Please try again.");
+    } finally {
+      setDeletingVisit(false);
+    }
+  };
 
   return (
     <div className="pb-28">
@@ -392,6 +422,28 @@ export function VisitDetailPage() {
                 Export Visit Report (PDF)
               </span>
             </button>
+
+            {isSupabaseVisit && (
+              <div className="pt-2">
+                <button
+                  type="button"
+                  onClick={() => void handleDeleteVisit()}
+                  disabled={deletingVisit}
+                  className="w-full py-3.5 rounded-2xl flex items-center justify-center gap-2 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+                  style={{ background: "white", border: "1.5px solid #DC2626" }}
+                >
+                  <AlertTriangle size={16} color="#DC2626" />
+                  <span style={{ color: "#DC2626", fontSize: "0.85rem", fontWeight: 700 }}>
+                    {deletingVisit ? "Deleting Visit..." : "Delete Visit"}
+                  </span>
+                </button>
+                {deleteError && (
+                  <p style={{ color: "#B91C1C", fontSize: "0.78rem", marginTop: 8 }}>
+                    {deleteError}
+                  </p>
+                )}
+              </div>
+            )}
           </>
         )}
 
