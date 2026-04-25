@@ -83,7 +83,7 @@ export function VisitDetailPage() {
         }
 
         const projectId = typeof visitRow.project_id === "string" ? visitRow.project_id : "";
-        const [{ data: projectRow, error: projectError }, { data: treeRecords, error: treeRecordsError }] = await Promise.all([
+        const [{ data: projectRow, error: projectError }, { data: treeRecords, error: treeRecordsError }, { count: projectTreeCount, error: projectTreesError }] = await Promise.all([
           projectId
             ? supabase.from("projects").select("id, name, slug").eq("id", projectId).maybeSingle()
             : Promise.resolve({ data: null, error: null }),
@@ -91,10 +91,17 @@ export function VisitDetailPage() {
             .from("tree_visit_records")
             .select("tree_id, tpm_status, health, damage, notes")
             .eq("visit_id", id),
+          projectId
+            ? supabase
+              .from("trees")
+              .select("tree_id", { count: "exact", head: true })
+              .eq("project_id", projectId)
+            : Promise.resolve({ count: 0, error: null }),
         ]);
 
         if (projectError) throw projectError;
         if (treeRecordsError) throw treeRecordsError;
+        if (projectTreesError) throw projectTreesError;
 
         const treeIds = Array.from(
           new Set(
@@ -146,6 +153,8 @@ export function VisitDetailPage() {
         });
 
         const inspectedTrees = normalizedTreeInspections.length;
+        const totalTrees = projectTreeCount ?? 0;
+        const noChangeTrees = Math.max(totalTrees - inspectedTrees, 0);
         const breachCount = normalizedTreeInspections.filter((record) => record.tpmCompliance === "not-compliant").length;
 
         const mappedVisit: Visit = {
@@ -156,9 +165,9 @@ export function VisitDetailPage() {
           type: normalizeVisitType(visitRow.visit_type),
           inspector: visitRow.inspector_name ?? "Unknown Inspector",
           status: "completed",
-          totalTrees: inspectedTrees,
+          totalTrees,
           inspectedTrees,
-          noChangeTrees: 0,
+          noChangeTrees,
           breachCount,
           notes: visitRow.notes ?? "",
           treeInspections: normalizedTreeInspections,

@@ -50,6 +50,10 @@ type TreeVisitRecordRow = {
   tpm_status: string | null;
 };
 
+type TreeProjectRow = {
+  project_id: string | null;
+};
+
 function normalizeVisitType(raw: string | null): VisitType {
   if (!raw) return "Routine Visit";
   if (raw in VISIT_TYPE_SHORT) return raw as VisitType;
@@ -224,17 +228,21 @@ export function VisitsPage() {
           new Set(typedVisits.map((visit) => visit.project_id).filter((projectId): projectId is string => Boolean(projectId))),
         );
 
-        const [{ data: projectsData, error: projectsError }, { data: recordsData, error: recordsError }] = await Promise.all([
+        const [{ data: projectsData, error: projectsError }, { data: recordsData, error: recordsError }, { data: treesData, error: treesError }] = await Promise.all([
           projectIds.length > 0
             ? supabase.from("projects").select("id, name, slug").in("id", projectIds)
             : Promise.resolve({ data: [], error: null }),
           visitIds.length > 0
             ? supabase.from("tree_visit_records").select("visit_id, tpm_status").in("visit_id", visitIds)
             : Promise.resolve({ data: [], error: null }),
+          projectIds.length > 0
+            ? supabase.from("trees").select("project_id").in("project_id", projectIds)
+            : Promise.resolve({ data: [], error: null }),
         ]);
 
         if (projectsError) throw projectsError;
         if (recordsError) throw recordsError;
+        if (treesError) throw treesError;
 
         const projectMap = new Map<string, ProjectRow>(
           ((projectsData ?? []) as ProjectRow[]).map((project) => [project.id, project]),
@@ -249,11 +257,20 @@ export function VisitsPage() {
           recordSummaryByVisitId.set(record.visit_id, current);
         });
 
+        const treeCountByProjectId = new Map<string, number>();
+        ((treesData ?? []) as TreeProjectRow[]).forEach((tree) => {
+          if (!tree.project_id) return;
+          treeCountByProjectId.set(tree.project_id, (treeCountByProjectId.get(tree.project_id) ?? 0) + 1);
+        });
+
         const mappedRealVisits: VisitListItem[] = typedVisits.map((row) => {
           const project = row.project_id ? projectMap.get(row.project_id) : null;
           const summary = recordSummaryByVisitId.get(row.id) ?? { inspectedTrees: 0, breachCount: 0 };
           const projectSlug = project?.slug ?? row.project_id ?? "";
           const projectName = project?.name ?? "Unknown Project";
+          const totalTrees = row.project_id ? (treeCountByProjectId.get(row.project_id) ?? 0) : 0;
+          const inspectedTrees = summary.inspectedTrees;
+          const noChangeTrees = Math.max(totalTrees - inspectedTrees, 0);
 
           return {
             id: row.id,
@@ -263,9 +280,9 @@ export function VisitsPage() {
             type: normalizeVisitType(row.visit_type),
             inspector: row.inspector_name ?? "Unknown Inspector",
             status: "completed",
-            totalTrees: summary.inspectedTrees,
-            inspectedTrees: summary.inspectedTrees,
-            noChangeTrees: 0,
+            totalTrees,
+            inspectedTrees,
+            noChangeTrees,
             breachCount: summary.breachCount,
             notes: row.notes ?? "",
             treeInspections: [],
