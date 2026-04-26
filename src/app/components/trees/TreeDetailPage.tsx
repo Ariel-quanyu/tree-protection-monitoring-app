@@ -901,6 +901,41 @@ export function TreeDetailPage() {
                             </span>
                           )}
                         </div>
+                        <div style={{ marginTop: 8 }}>
+                          <p style={{
+                            color: "#9CA3AF",
+                            fontSize: "0.6rem",
+                            fontWeight: 700,
+                            textTransform: "uppercase",
+                            letterSpacing: "0.08em",
+                            marginBottom: 6,
+                          }}>
+                            Required Tree Protection Measures
+                          </p>
+                          {tree.requiredMeasures.length > 0 ? (
+                            <div className="flex flex-wrap gap-1.5">
+                              {tree.requiredMeasures.map((measure) => (
+                                <span
+                                  key={`${record.id}-${measure}`}
+                                  className="rounded-full px-2 py-0.5"
+                                  style={{
+                                    background: "#F0FDF4",
+                                    border: "1px solid #BBF7D0",
+                                    color: "#166534",
+                                    fontSize: "0.65rem",
+                                    fontWeight: 600,
+                                  }}
+                                >
+                                  {measure}
+                                </span>
+                              ))}
+                            </div>
+                          ) : (
+                            <p style={{ color: "#9CA3AF", fontSize: "0.7rem" }}>
+                              No required measures recorded
+                            </p>
+                          )}
+                        </div>
                         {record.notes && (
                           <p style={{ color: "#4B5563", fontSize: "0.73rem",
                             marginTop: 6, lineHeight: 1.5 }}>
