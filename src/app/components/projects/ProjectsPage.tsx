@@ -60,7 +60,7 @@ function ProjectCard({
 
   const handleOpen = () => {
     setSelectedProjectId(project.id);
-    navigate("/trees");
+    navigate(`/projects/${project.id}`);
   };
 
   return (
@@ -439,7 +439,7 @@ export function ProjectsPage() {
       {/* ── Footer note ──────────────────────────────────────────────────────── */}
       {filtered.length > 0 && (
         <p style={{ color: "#D1D5DB", fontSize: "0.65rem", textAlign: "center", marginTop: 20, paddingBottom: 4 }}>
-          Tap any project card to open its tree inventory and visits
+          Tap any project card to open project details and inspection schedule
         </p>
       )}
     </div>
