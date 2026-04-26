@@ -35,6 +35,7 @@
  * encroachment_parts       → encroachmentParts
  * retention_status         → retentionStatus
  * tree_protection_measures → treeProtectionMeasures
+ * required_measures        → requiredMeasures
  * health                   → health
  * structure                → structure
  * origin                   → origin
@@ -91,6 +92,7 @@ export interface SupabaseTree {
   // ── Retention ───────────────────────────────────────────────────────────────
   retentionStatus: string;       // retention_status
   treeProtectionMeasures: string; // tree_protection_measures  ("" when none / "None")
+  requiredMeasures: string[];    // required_measures text[] baseline protection requirements
 
   // ── Baseline condition (arborist assessment at time of inventory) ─────────
   health: string;                // health  ("Good" | "Fair" | "Poor" | "Dead" | "")
@@ -154,6 +156,13 @@ function maybeNumber(raw: unknown): number | null {
   return isNaN(n) ? null : n;
 }
 
+function normaliseStringArray(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item) => String(item ?? "").trim())
+    .filter(Boolean);
+}
+
 // ── Canonical mapper ──────────────────────────────────────────────────────────
 
 /**
@@ -191,6 +200,7 @@ export function mapSupabaseTree(
     // Retention
     retentionStatus:        String(row.retention_status ?? ""),
     treeProtectionMeasures: normalise(row.tree_protection_measures),
+    requiredMeasures:       normaliseStringArray(row.required_measures),
 
     // Baseline condition
     health:                 normalise(row.health),

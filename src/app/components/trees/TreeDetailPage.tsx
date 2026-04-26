@@ -37,6 +37,7 @@ interface TreeVisitRecord {
     visit_type: string | null;
     inspection_date: string | null;
   } | null;
+  [key: string]: unknown;
 }
 
 function parseObservations(raw: unknown): EmbeddedObs[] {
@@ -82,6 +83,51 @@ function parseMeasureString(raw: string): Set<MeasureId> {
     if (lower.includes(keyword)) active.add(m.id);
   }
   return active;
+}
+
+function parseMeasureArray(raw: unknown): string[] {
+  if (Array.isArray(raw)) {
+    return raw
+      .map((value) => String(value ?? "").trim())
+      .filter(Boolean);
+  }
+
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (!trimmed) return [];
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (Array.isArray(parsed)) {
+        return parsed
+          .map((value) => String(value ?? "").trim())
+          .filter(Boolean);
+      }
+    } catch {
+      // Keep fallback split behavior below for plain-text values.
+    }
+    return trimmed
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
+  }
+
+  return [];
+}
+
+function getMeasuresInPlaceFromRecord(record: TreeVisitRecord): string[] {
+  const candidates = [
+    "measures_in_place_this_visit",
+    "measures_in_place",
+    "protection_measures_in_place",
+    "tree_protection_measures_in_place",
+  ] as const;
+
+  for (const key of candidates) {
+    const parsed = parseMeasureArray(record[key]);
+    if (parsed.length > 0) return parsed;
+  }
+
+  return [];
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -132,9 +178,8 @@ function SectionLabel({ label }: { label: string }) {
 // ── Compliance card ───────────────────────────────────────────────────────────
 
 function TPMStatusCard({
-  baselineMeasures, selectedMeasures, onToggleMeasure, value, onChange,
+  selectedMeasures, onToggleMeasure, value, onChange,
 }: {
-  baselineMeasures: string;
   selectedMeasures: Set<MeasureId>;
   onToggleMeasure: (id: MeasureId) => void;
   value: TPMStatus;
@@ -143,23 +188,6 @@ function TPMStatusCard({
   return (
     <div className="rounded-2xl p-4 mb-4"
       style={{ background: "white", boxShadow: "0 1px 6px rgba(0,0,0,0.06)" }}>
-
-      {/* ── Required measures from baseline ── */}
-      <SectionLabel label="Tree Protection Measures" />
-
-      {baselineMeasures ? (
-        <div className="rounded-xl px-3 py-2.5 mb-3 flex items-start gap-2"
-          style={{ background: "#F0FDF4", border: "1px solid #BBF7D0" }}>
-          <Shield size={13} color="#15803D" style={{ flexShrink: 0, marginTop: 1 }} />
-          <p style={{ color: "#374151", fontSize: "0.73rem", lineHeight: 1.55 }}>
-            <strong style={{ color: "#15803D" }}>Required:</strong> {baselineMeasures}
-          </p>
-        </div>
-      ) : (
-        <p style={{ color: "#9CA3AF", fontSize: "0.72rem", marginBottom: 10 }}>
-          No measures specified in baseline inventory.
-        </p>
-      )}
 
       {/* ── Multi-select measure chips ── */}
       <p style={{ color: "#9CA3AF", fontSize: "0.6rem", fontWeight: 700,
@@ -219,6 +247,48 @@ function TPMStatusCard({
         })}
       </div>
     </div>
+  );
+}
+
+function RequiredMeasuresCard({ measures }: { measures: string[] }) {
+  const hasMeasures = measures.length > 0;
+  return (
+    <div className="rounded-2xl p-4 mb-4"
+      style={{ background: "white", boxShadow: "0 1px 6px rgba(0,0,0,0.06)" }}>
+      <SectionLabel label="Required Tree Protection Measures" />
+      {hasMeasures ? (
+        <div className="flex flex-wrap gap-2">
+          {measures.map((measure) => (
+            <span
+              key={measure}
+              className="rounded-full px-2.5 py-1"
+              style={{
+                background: "#F0FDF4",
+                border: "1px solid #BBF7D0",
+                color: "#166534",
+                fontSize: "0.72rem",
+                fontWeight: 600,
+              }}
+            >
+              {measure}
+            </span>
+          ))}
+        </div>
+      ) : (
+        <p style={{ color: "#9CA3AF", fontSize: "0.72rem" }}>
+          No required protection measures recorded.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function MeasureChip({ label }: { label: string }) {
+  return (
+    <span className="rounded-full px-2 py-0.5"
+      style={{ background: "#DCFCE7", color: "#15803D", fontSize: "0.65rem", fontWeight: 600 }}>
+      {label}
+    </span>
   );
 }
 
@@ -379,7 +449,8 @@ export function TreeDetailPage() {
     setTree(null);
 
     supabase
-      .from("trees").select("*")
+      .from("trees")
+      .select("*, required_measures")
       .eq("project_id", uuid).eq("tree_id", routeTreeId)
       .maybeSingle()
       .then(({ data, error }) => {
@@ -391,8 +462,8 @@ export function TreeDetailPage() {
           const mapped = mapSupabaseTree(raw, project.id);
           setTree(mapped);
           setTreeObs(parseObservations(raw.observations));
-          // Pre-populate measures from baseline inventory text
-          setSelectedMeasures(parseMeasureString(mapped.treeProtectionMeasures));
+          // Pre-populate with required baseline protection measures.
+          setSelectedMeasures(parseMeasureString(mapped.requiredMeasures.join(", ")));
         }
         setLoading(false);
       });
@@ -408,7 +479,7 @@ export function TreeDetailPage() {
 
     supabase
       .from("tree_visit_records")
-      .select("id, visit_id, project_id, tree_id, tpm_status, health, damage, notes, created_at, visits(id, visit_type, inspection_date)")
+      .select("*, visits(id, visit_type, inspection_date)")
       .eq("project_id", projectUuid)
       .eq("tree_id", routeTreeId)
       .order("created_at", { ascending: false })
@@ -647,9 +718,10 @@ export function TreeDetailPage() {
               </div>
             </div>
 
+            <RequiredMeasuresCard measures={tree.requiredMeasures} />
+
             {/* TPM compliance */}
             <TPMStatusCard
-              baselineMeasures={tree.treeProtectionMeasures}
               selectedMeasures={selectedMeasures}
               onToggleMeasure={(id) => {
                 const newSet = new Set(selectedMeasures);
@@ -834,6 +906,7 @@ export function TreeDetailPage() {
                 const cfg = VISIT_TYPE_COLORS[visitType];
                 const isBreach = record.tpm_status === "not-compliant";
                 const eventDate = record.visits?.inspection_date ?? record.created_at;
+                const measuresInPlaceThisVisit = getMeasuresInPlaceFromRecord(record);
                 return (
                   <div
                     key={record.id}
@@ -884,6 +957,36 @@ export function TreeDetailPage() {
                             </span>
                           )}
                         </div>
+                        <div className="mt-3">
+                          <p style={{ color: "#9CA3AF", fontSize: "0.6rem", fontWeight: 700,
+                            textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>
+                            Required Tree Protection Measures
+                          </p>
+                          {tree.requiredMeasures.length > 0 ? (
+                            <div className="flex flex-wrap gap-1.5">
+                              {tree.requiredMeasures.map((measure) => (
+                                <MeasureChip key={`${record.id}-required-${measure}`} label={measure} />
+                              ))}
+                            </div>
+                          ) : (
+                            <p style={{ color: "#9CA3AF", fontSize: "0.7rem", lineHeight: 1.4 }}>
+                              No required measures recorded.
+                            </p>
+                          )}
+                        </div>
+                        {measuresInPlaceThisVisit.length > 0 && (
+                          <div className="mt-3">
+                            <p style={{ color: "#9CA3AF", fontSize: "0.6rem", fontWeight: 700,
+                              textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>
+                              Measures in Place This Visit
+                            </p>
+                            <div className="flex flex-wrap gap-1.5">
+                              {measuresInPlaceThisVisit.map((measure) => (
+                                <MeasureChip key={`${record.id}-observed-${measure}`} label={measure} />
+                              ))}
+                            </div>
+                          </div>
+                        )}
                         {record.notes && (
                           <p style={{ color: "#4B5563", fontSize: "0.73rem",
                             marginTop: 6, lineHeight: 1.5 }}>
