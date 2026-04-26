@@ -95,6 +95,14 @@ const ENC_BG: Record<EncroachmentClass, string> = {
   None: "#F0FDF4", Minor: "#FFFBEB", Moderate: "#FFFBEB", Major: "#FEF2F2",
 };
 
+function getLocalDateYYYYMMDD(): string {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 // ── Sub-components ────────────────────────────────────────────────────────────
 
 function InfoRow({ label, value, color, mono = false }: {
@@ -354,6 +362,7 @@ export function TreeDetailPage() {
   const [tpmStatus,  setTpmStatus]  = useState<TPMStatus>("compliant");
   const [health,     setHealth]     = useState<TreeHealth>("");
   const [damage,     setDamage]     = useState<TreeDamage>("");
+  const [quickInspectionDate, setQuickInspectionDate] = useState<string>(getLocalDateYYYYMMDD());
   const [quickVisitType, setQuickVisitType] = useState<VisitType>("Routine Visit");
   const [isQuickSaving, setIsQuickSaving] = useState(false);
   const [quickSaveError, setQuickSaveError] = useState<string | null>(null);
@@ -463,18 +472,14 @@ export function TreeDetailPage() {
     setIsQuickSaving(true);
 
     try {
-      const today = new Date().toISOString().slice(0, 10);
-      const normalizedTreeId = String(
-        (tree as unknown as { treeId?: unknown; tree_id?: unknown }).treeId
-          ?? (tree as unknown as { treeId?: unknown; tree_id?: unknown }).tree_id
-          ?? tree.id,
-      ).trim();
+      const normalizedTreeId = String(tree.id).trim();
+      const projectId = tree.project_id ?? project?.uuid;
 
       const { data: existingVisit, error: existingVisitError } = await supabase
         .from("visits")
         .select("id")
-        .eq("project_id", tree.project_id)
-        .eq("inspection_date", today)
+        .eq("project_id", projectId)
+        .eq("inspection_date", quickInspectionDate)
         .eq("visit_type", quickVisitType)
         .order("created_at", { ascending: false })
         .limit(1)
@@ -488,10 +493,10 @@ export function TreeDetailPage() {
         const { data: createdVisit, error: createdVisitError } = await supabase
           .from("visits")
           .insert({
-            project_id: tree.project_id,
-            tree_id: tree.id,
+            project_id: projectId,
+            tree_id: normalizedTreeId,
             visit_type: quickVisitType,
-            inspection_date: today,
+            inspection_date: quickInspectionDate,
             inspector_name: project.inspector?.trim() || "Site Arborist",
             notes: "",
           })
@@ -503,43 +508,21 @@ export function TreeDetailPage() {
         visitId = createdVisit.id;
       }
 
-      const { data: existingTreeRecord, error: existingTreeRecordError } = await supabase
+      const { error: upsertTreeVisitRecordError } = await supabase
         .from("tree_visit_records")
-        .select("id")
-        .eq("visit_id", visitId)
-        .eq("project_id", tree.project_id)
-        .eq("tree_id", normalizedTreeId)
-        .limit(1)
-        .maybeSingle();
+        .upsert({
+          visit_id: visitId,
+          project_id: projectId,
+          tree_id: normalizedTreeId,
+          tpm_status: tpmStatus,
+          health: health || null,
+          damage: damage || null,
+          notes: "",
+        }, { onConflict: "visit_id,tree_id" });
 
-      if (existingTreeRecordError) throw existingTreeRecordError;
-
-      if (existingTreeRecord?.id) {
-        const { error: updateTreeVisitRecordError } = await supabase
-          .from("tree_visit_records")
-          .update({
-            tpm_status: tpmStatus,
-            health: health || null,
-            damage: damage || null,
-            notes: "",
-          })
-          .eq("id", existingTreeRecord.id);
-
-        if (updateTreeVisitRecordError) throw updateTreeVisitRecordError;
-      } else {
-        const { error: insertTreeVisitRecordError } = await supabase
-          .from("tree_visit_records")
-          .insert({
-            visit_id: visitId,
-            project_id: tree.project_id,
-            tree_id: normalizedTreeId,
-            tpm_status: tpmStatus,
-            health: health || null,
-            damage: damage || null,
-            notes: "",
-          });
-
-        if (insertTreeVisitRecordError) throw insertTreeVisitRecordError;
+      if (upsertTreeVisitRecordError) {
+        console.error("Quick tree inspection upsert failed:", upsertTreeVisitRecordError);
+        throw upsertTreeVisitRecordError;
       }
 
       navigate(`/visits/${visitId}`);
@@ -691,6 +674,19 @@ export function TreeDetailPage() {
               className="rounded-2xl p-4 mb-4"
               style={{ background: "white", boxShadow: "0 1px 6px rgba(0,0,0,0.06)" }}
             >
+              <SectionLabel label="Inspection Date" />
+              <input
+                type="date"
+                value={quickInspectionDate}
+                onChange={(event) => setQuickInspectionDate(event.target.value)}
+                className="w-full rounded-xl px-3 py-2.5 mb-3"
+                style={{
+                  border: "1px solid #D1D5DB",
+                  background: "#F9FAFB",
+                  color: "#111827",
+                  fontSize: "0.82rem",
+                }}
+              />
               <SectionLabel label="Visit Type" />
               <select
                 value={quickVisitType}
