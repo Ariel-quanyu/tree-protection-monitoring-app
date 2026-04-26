@@ -640,17 +640,45 @@ export function TreeDetailPage() {
             {/* Photos */}
             <PhotoCard />
 
-            {/* Log full observation CTA */}
-            <button
-              onClick={() => navigate(`/visits/new`)}
-              className="w-full py-4 rounded-2xl flex items-center justify-center gap-2 mb-4 active:scale-[0.98] transition-all"
-              style={{ background: "#1B4332" }}
+            <div
+              className="rounded-2xl p-4 mb-4"
+              style={{ background: "white", boxShadow: "0 1px 6px rgba(0,0,0,0.06)" }}
             >
-              <ClipboardList size={18} color="white" />
-              <span style={{ color: "white", fontSize: "0.9rem", fontWeight: 700 }}>
-                Log as Part of a Visit
-              </span>
-            </button>
+              <SectionLabel label="Visit Type" />
+              <select
+                value={quickVisitType}
+                onChange={(event) => setQuickVisitType(event.target.value as VisitType)}
+                className="w-full rounded-xl px-3 py-2.5"
+                style={{
+                  border: "1px solid #D1D5DB",
+                  background: "#F9FAFB",
+                  color: "#111827",
+                  fontSize: "0.82rem",
+                }}
+              >
+                {ALL_VISIT_TYPES.map((type) => (
+                  <option key={type} value={type}>
+                    {type}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={handleQuickInspectionSave}
+                disabled={isQuickSaving}
+                className="w-full py-4 rounded-2xl flex items-center justify-center gap-2 mt-3 active:scale-[0.98] transition-all disabled:opacity-70 disabled:cursor-not-allowed"
+                style={{ background: "#1B4332" }}
+              >
+                <CheckCircle2 size={18} color="white" />
+                <span style={{ color: "white", fontSize: "0.9rem", fontWeight: 700 }}>
+                  {isQuickSaving ? "Saving..." : "Save Tree Inspection"}
+                </span>
+              </button>
+              {quickSaveError && (
+                <p style={{ color: "#B91C1C", fontSize: "0.75rem", marginTop: 8, lineHeight: 1.5 }}>
+                  {quickSaveError}
+                </p>
+              )}
+            </div>
 
             <div
               className="rounded-2xl p-4 mb-4"
