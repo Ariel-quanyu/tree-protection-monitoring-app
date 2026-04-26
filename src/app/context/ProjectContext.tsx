@@ -9,6 +9,7 @@ interface ProjectContextValue {
   loadingProjects: boolean;
   selectedProjectId: string;
   setSelectedProjectId: (id: string) => void;
+  updateProject: (id: string, updates: Partial<ProjectData>) => void;
 }
 
 const ProjectContext = createContext<ProjectContextValue>({
@@ -16,6 +17,7 @@ const ProjectContext = createContext<ProjectContextValue>({
   loadingProjects: true,
   selectedProjectId: "",
   setSelectedProjectId: () => {},
+  updateProject: () => {},
 });
 
 // ─── Provider ─────────────────────────────────────────────────────────────────
@@ -24,6 +26,11 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
   const [projects, setProjects] = useState<ProjectData[]>([]);
   const [loadingProjects, setLoadingProjects] = useState(true);
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
+  const updateProject = (id: string, updates: Partial<ProjectData>) => {
+    setProjects((prev) => prev.map((project) => (
+      project.id === id ? { ...project, ...updates } : project
+    )));
+  };
 
   useEffect(() => {
     fetchProjectsForUi()
@@ -50,7 +57,7 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <ProjectContext.Provider
-      value={{ projects, loadingProjects, selectedProjectId, setSelectedProjectId }}
+      value={{ projects, loadingProjects, selectedProjectId, setSelectedProjectId, updateProject }}
     >
       {children}
     </ProjectContext.Provider>
