@@ -1,4 +1,5 @@
 export type ProjectStatus = 'active' | 'monitoring' | 'completed';
+export type InspectionFrequency = "Monthly" | "2-monthly" | "3-monthly";
 
 export interface ProjectUiMeta {
   tabLabel: string;
@@ -32,6 +33,10 @@ export interface ProjectData {
   status: ProjectStatus;
   unresolvedObs: number;
   criticalObs: number;
+  inspectionFrequency: InspectionFrequency;
+  nextInspectionDue: string;
+  reminderEnabled: boolean;
+  reminderEmail: string;
   // Computed from local tree data
   totalTrees: number;
   compliantTrees: number;
