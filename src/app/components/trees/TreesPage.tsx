@@ -85,9 +85,9 @@ function getDisplayMeasures(tree: SupabaseTree): string[] {
 // ─── Project Dropdown ─────────────────────────────────────────────────────────
 
 function ProjectDropdown({
-  projects, selectedId, onSelect,
+  projects, selectedId, onSelect, treeCounts,
 }: {
-  projects: ProjectData[]; selectedId: string; onSelect: (id: string) => void;
+  projects: ProjectData[]; selectedId: string; onSelect: (id: string) => void; treeCounts: Record<string, number>;
 }) {
   const [open, setOpen] = useState(false);
   const selected = projects.find(p => p.id === selectedId) ?? projects[0];
@@ -157,7 +157,7 @@ function ProjectDropdown({
                         {p.name}
                       </p>
                       <div className="flex items-center gap-2 mt-0.5">
-                        <span style={{ color: "#9CA3AF", fontSize: "0.7rem" }}>{p.totalTrees} trees</span>
+                        <span style={{ color: "#9CA3AF", fontSize: "0.7rem" }}>{(treeCounts[p.uuid] ?? 0).toLocaleString()} trees</span>
                         <span style={{ color: "#E5E7EB" }}>·</span>
                         <span style={{ color: STATUS_COLORS[p.status], fontSize: "0.68rem",
                           fontWeight: 600, textTransform: "capitalize" }}>{p.status}</span>
@@ -529,10 +529,34 @@ export function TreesPage() {
   const [trees,        setTrees]        = useState<SupabaseTree[]>([]);
   const [loadingTrees, setLoadingTrees] = useState(false);
   const [treeError,    setTreeError]    = useState<string | null>(null);
+  const [projectTreeCounts, setProjectTreeCounts] = useState<Record<string, number>>({});
 
   // Resolve selected project early so the fetch effect can read its uuid.
   // May be undefined while projects are still loading.
   const project = projects.find(p => p.id === selectedId) ?? projects[0];
+
+  useEffect(() => {
+    if (projects.length === 0) return;
+    let cancelled = false;
+
+    supabase
+      .from("trees")
+      .select("project_id")
+      .then(({ data, error }) => {
+        if (cancelled || error || !data) return;
+        const counts: Record<string, number> = {};
+        data.forEach((row) => {
+          const projectId = String(row.project_id ?? "");
+          if (!projectId) return;
+          counts[projectId] = (counts[projectId] ?? 0) + 1;
+        });
+        setProjectTreeCounts(counts);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [projects.length]);
 
   // ── Fetch trees from Supabase using the project UUID (not the slug) ───────
   useEffect(() => {
@@ -631,6 +655,7 @@ export function TreesPage() {
       <ProjectDropdown
         projects={projects}
         selectedId={selectedId}
+        treeCounts={projectTreeCounts}
         onSelect={id => {
           setSelectedProjectId(id);
           setSearch("");
