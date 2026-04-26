@@ -58,6 +58,31 @@ const RETENTION_CFG: Record<string, { color: string }> = {
   "Remove":                               { color: "#DC2626" },
 };
 
+const TPM_EMPTY_VALUES = new Set(["", "none", "n/a", "na", "null"]);
+
+function cleanMeasureLabel(value: string): string | null {
+  const label = value.trim();
+  if (!label) return null;
+  if (TPM_EMPTY_VALUES.has(label.toLowerCase())) return null;
+  return label;
+}
+
+function parseTreeProtectionMeasures(raw: string): string[] {
+  const parts = raw
+    .split(/[,;\/\n]+/g)
+    .map((item) => cleanMeasureLabel(item))
+    .filter((item): item is string => item !== null);
+  return Array.from(new Set(parts));
+}
+
+function getDisplayMeasures(tree: SupabaseTree): string[] {
+  const required = tree.requiredMeasures
+    .map((item) => cleanMeasureLabel(item))
+    .filter((item): item is string => item !== null);
+  if (required.length > 0) return Array.from(new Set(required));
+  return parseTreeProtectionMeasures(tree.treeProtectionMeasures);
+}
+
 // ─── Project Dropdown ─────────────────────────────────────────────────────────
 
 function ProjectDropdown({
@@ -233,6 +258,7 @@ function RetentionPill({ status }: { status: string }) {
 
 function TreeCard({ tree }: { tree: SupabaseTree }) {
   const navigate = useNavigate();
+  const displayMeasures = getDisplayMeasures(tree);
   return (
     <button
       onClick={() => navigate(`/trees/${tree.id}`)}
@@ -281,6 +307,44 @@ function TreeCard({ tree }: { tree: SupabaseTree }) {
             </span>
           ) : null}
         </p>
+
+        <div className="mt-2">
+          <p style={{ color: "#9CA3AF", fontSize: "0.6rem", fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 5 }}>
+            Required TPM
+          </p>
+          {displayMeasures.length > 0 ? (
+            <div className="flex flex-wrap gap-1.5">
+              {displayMeasures.map((measure) => (
+                <span
+                  key={`${tree.id}-${measure}`}
+                  className="rounded-full px-2 py-0.5"
+                  style={{
+                    background: "#F0FDF4",
+                    border: "1px solid #BBF7D0",
+                    color: "#166534",
+                    fontSize: "0.62rem",
+                    fontWeight: 600,
+                  }}
+                >
+                  {measure}
+                </span>
+              ))}
+            </div>
+          ) : (
+            <span
+              className="inline-flex rounded-full px-2 py-0.5"
+              style={{
+                background: "#F3F4F6",
+                border: "1px solid #E5E7EB",
+                color: "#6B7280",
+                fontSize: "0.62rem",
+                fontWeight: 600,
+              }}
+            >
+              No TPM specified
+            </span>
+          )}
+        </div>
 
         {/* Row 3: Retention pill */}
         <div className="mt-1.5">
@@ -483,7 +547,7 @@ export function TreesPage() {
 
     supabase
       .from("trees")
-      .select("*")
+      .select("*, tree_protection_measures, required_measures")
       .eq("project_id", uuid)
       .then(({ data, error }) => {
         if (cancelled) return;
