@@ -132,9 +132,8 @@ function SectionLabel({ label }: { label: string }) {
 // ── Compliance card ───────────────────────────────────────────────────────────
 
 function TPMStatusCard({
-  baselineMeasures, selectedMeasures, onToggleMeasure, value, onChange,
+  selectedMeasures, onToggleMeasure, value, onChange,
 }: {
-  baselineMeasures: string;
   selectedMeasures: Set<MeasureId>;
   onToggleMeasure: (id: MeasureId) => void;
   value: TPMStatus;
@@ -143,23 +142,6 @@ function TPMStatusCard({
   return (
     <div className="rounded-2xl p-4 mb-4"
       style={{ background: "white", boxShadow: "0 1px 6px rgba(0,0,0,0.06)" }}>
-
-      {/* ── Required measures from baseline ── */}
-      <SectionLabel label="Tree Protection Measures" />
-
-      {baselineMeasures ? (
-        <div className="rounded-xl px-3 py-2.5 mb-3 flex items-start gap-2"
-          style={{ background: "#F0FDF4", border: "1px solid #BBF7D0" }}>
-          <Shield size={13} color="#15803D" style={{ flexShrink: 0, marginTop: 1 }} />
-          <p style={{ color: "#374151", fontSize: "0.73rem", lineHeight: 1.55 }}>
-            <strong style={{ color: "#15803D" }}>Required:</strong> {baselineMeasures}
-          </p>
-        </div>
-      ) : (
-        <p style={{ color: "#9CA3AF", fontSize: "0.72rem", marginBottom: 10 }}>
-          No measures specified in baseline inventory.
-        </p>
-      )}
 
       {/* ── Multi-select measure chips ── */}
       <p style={{ color: "#9CA3AF", fontSize: "0.6rem", fontWeight: 700,
@@ -218,6 +200,39 @@ function TPMStatusCard({
           );
         })}
       </div>
+    </div>
+  );
+}
+
+function RequiredMeasuresCard({ measures }: { measures: string[] }) {
+  const hasMeasures = measures.length > 0;
+  return (
+    <div className="rounded-2xl p-4 mb-4"
+      style={{ background: "white", boxShadow: "0 1px 6px rgba(0,0,0,0.06)" }}>
+      <SectionLabel label="Required Tree Protection Measures" />
+      {hasMeasures ? (
+        <div className="flex flex-wrap gap-2">
+          {measures.map((measure) => (
+            <span
+              key={measure}
+              className="rounded-full px-2.5 py-1"
+              style={{
+                background: "#F0FDF4",
+                border: "1px solid #BBF7D0",
+                color: "#166534",
+                fontSize: "0.72rem",
+                fontWeight: 600,
+              }}
+            >
+              {measure}
+            </span>
+          ))}
+        </div>
+      ) : (
+        <p style={{ color: "#9CA3AF", fontSize: "0.72rem" }}>
+          No required protection measures recorded.
+        </p>
+      )}
     </div>
   );
 }
@@ -379,7 +394,8 @@ export function TreeDetailPage() {
     setTree(null);
 
     supabase
-      .from("trees").select("*")
+      .from("trees")
+      .select("*, required_measures")
       .eq("project_id", uuid).eq("tree_id", routeTreeId)
       .maybeSingle()
       .then(({ data, error }) => {
@@ -391,8 +407,8 @@ export function TreeDetailPage() {
           const mapped = mapSupabaseTree(raw, project.id);
           setTree(mapped);
           setTreeObs(parseObservations(raw.observations));
-          // Pre-populate measures from baseline inventory text
-          setSelectedMeasures(parseMeasureString(mapped.treeProtectionMeasures));
+          // Pre-populate with required baseline protection measures.
+          setSelectedMeasures(parseMeasureString(mapped.requiredMeasures.join(", ")));
         }
         setLoading(false);
       });
@@ -647,9 +663,10 @@ export function TreeDetailPage() {
               </div>
             </div>
 
+            <RequiredMeasuresCard measures={tree.requiredMeasures} />
+
             {/* TPM compliance */}
             <TPMStatusCard
-              baselineMeasures={tree.treeProtectionMeasures}
               selectedMeasures={selectedMeasures}
               onToggleMeasure={(id) => {
                 const newSet = new Set(selectedMeasures);
