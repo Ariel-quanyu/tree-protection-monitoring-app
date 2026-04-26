@@ -8,23 +8,6 @@ import { type ProjectData } from "../../data/projectsData";
 import { useProject } from "../../context/ProjectContext";
 import { supabase } from "../../../lib/supabase";
 
-// ─── Monitoring setup mock (not yet in Supabase) ──────────────────────────────
-// These fields will eventually live in the projects table.
-
-interface MonitoringMeta {
-  frequency: string;   // e.g. "Monthly", "Fortnightly", "Weekly"
-  reminderEnabled: boolean;
-}
-
-const MONITORING_META: Record<string, MonitoringMeta> = {
-  "parliament-vic":         { frequency: "Monthly",     reminderEnabled: true  },
-  "4-beaufort-rd-croydon":  { frequency: "Fortnightly", reminderEnabled: true  },
-};
-
-function getMonitoring(id: string): MonitoringMeta {
-  return MONITORING_META[id] ?? { frequency: "Monthly", reminderEnabled: false };
-}
-
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const STATUS_CFG = {
@@ -46,24 +29,16 @@ function daysFromToday(date: Date): number {
   return Math.round((date.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
 }
 
-function formatDateShort(iso: string): string {
-  const d = parseDate(iso);
-  if (!d) return "Not set";
-  return d.toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
-}
-
-/** Returns a label + color describing the urgency of a nextAudit date */
-function auditUrgency(iso: string): {
+/** Returns a label + color describing the urgency of a due date */
+function dueDateMeta(iso: string): {
   label: string; color: string; bg: string; icon: "overdue" | "soon" | "ok" | "none";
 } {
   const d = parseDate(iso);
-  if (!d) return { label: "Not scheduled", color: "#9CA3AF", bg: "#F9FAFB", icon: "none" };
+  if (!d) return { label: "Not set", color: "#6B7280", bg: "#F9FAFB", icon: "none" };
   const days = daysFromToday(d);
-  if (days < 0)  return { label: `Overdue by ${Math.abs(days)}d`, color: "#DC2626", bg: "#FEF2F2",  icon: "overdue" };
-  if (days === 0) return { label: "Due today",                     color: "#DC2626", bg: "#FEF2F2",  icon: "overdue" };
-  if (days <= 7)  return { label: `Due in ${days}d`,               color: "#B45309", bg: "#FFFBEB",  icon: "soon"    };
-  if (days <= 14) return { label: `Due in ${days}d`,               color: "#B45309", bg: "#FFFBEB",  icon: "soon"    };
-  return { label: formatDateShort(iso),                             color: "#6B7280", bg: "#F9FAFB",  icon: "ok"      };
+  if (days < 0) return { label: `Overdue by ${Math.abs(days)}d`, color: "#DC2626", bg: "#FEF2F2", icon: "overdue" };
+  if (days === 0) return { label: "Due today", color: "#B45309", bg: "#FFFBEB", icon: "soon" };
+  return { label: `In ${days}d`, color: "#166534", bg: "#F0FDF4", icon: "ok" };
 }
 
 // ─── Project Card ──────────────────────────────────────────────────────────────
@@ -72,25 +47,20 @@ function ProjectCard({
   project,
   treeCount,
   isSelected,
-  reminderOn,
-  onToggleReminder,
 }: {
   project: ProjectData;
   treeCount: number | null;
   isSelected: boolean;
-  reminderOn: boolean;
-  onToggleReminder: () => void;
 }) {
   const navigate  = useNavigate();
   const { setSelectedProjectId } = useProject();
   const st        = STATUS_CFG[project.status];
-  const monitoring = getMonitoring(project.id);
-  const urgency   = auditUrgency(project.nextAudit);
+  const dueDate = dueDateMeta(project.nextInspectionDue);
   const hasCritical = project.criticalObs > 0;
 
   const handleOpen = () => {
     setSelectedProjectId(project.id);
-    navigate("/trees");
+    navigate(`/projects/${project.id}`);
   };
 
   return (
@@ -212,7 +182,7 @@ function ProjectCard({
             >
               <Calendar size={15} color="#7C3AED" />
               <p style={{ color: "#1E1B4B", fontSize: "0.8rem", fontWeight: 700, lineHeight: 1.15 }}>
-                {monitoring.frequency}
+                {project.inspectionFrequency}
               </p>
               <p style={{ color: "#7C3AED", fontSize: "0.57rem", fontWeight: 600,
                 textTransform: "uppercase", letterSpacing: "0.06em" }}>
@@ -221,35 +191,22 @@ function ProjectCard({
             </div>
 
             {/* — Next due — */}
-            <div
-              className="rounded-xl p-2.5 flex flex-col gap-1.5"
-              style={{
-                background: urgency.icon === "overdue" ? "#FEF2F2"
-                  : urgency.icon === "soon" ? "#FFFBEB"
-                  : "#F9FAFB",
-              }}
-            >
-              {urgency.icon === "overdue" ? (
+            <div className="rounded-xl p-2.5 flex flex-col gap-1.5" style={{ background: dueDate.bg }}>
+              {dueDate.icon === "overdue" ? (
                 <AlertTriangle size={15} color="#DC2626" />
-              ) : urgency.icon === "soon" ? (
+              ) : dueDate.icon === "soon" ? (
                 <Clock size={15} color="#B45309" />
+              ) : dueDate.icon === "ok" ? (
+                <Clock size={15} color="#166534" />
               ) : (
                 <Calendar size={15} color="#9CA3AF" />
               )}
-              <p style={{
-                color: urgency.icon === "overdue" ? "#DC2626"
-                  : urgency.icon === "soon" ? "#92400E"
-                  : "#111827",
-                fontSize: "0.75rem", fontWeight: 700, lineHeight: 1.2,
-              }}>
-                {urgency.icon === "overdue"
-                  ? `${Math.abs(daysFromToday(parseDate(project.nextAudit)!))}d overdue`
-                  : urgency.icon === "soon"
-                  ? `In ${daysFromToday(parseDate(project.nextAudit)!)}d`
-                  : formatDateShort(project.nextAudit)}
+              <p style={{ color: dueDate.color, fontSize: "0.75rem", fontWeight: 700, lineHeight: 1.2 }}>
+                {dueDate.label}
               </p>
-              <p style={{ color: urgency.icon === "overdue" ? "#FCA5A5"
-                : urgency.icon === "soon" ? "#FCD34D"
+              <p style={{ color: dueDate.icon === "overdue" ? "#FCA5A5"
+                : dueDate.icon === "soon" ? "#FCD34D"
+                : dueDate.icon === "ok" ? "#16A34A"
                 : "#9CA3AF",
                 fontSize: "0.57rem", fontWeight: 600,
                 textTransform: "uppercase", letterSpacing: "0.06em" }}>
@@ -257,28 +214,27 @@ function ProjectCard({
               </p>
             </div>
 
-            {/* — Reminder — (tappable to toggle) */}
-            <button
-              onClick={e => { e.stopPropagation(); onToggleReminder(); }}
-              className="rounded-xl p-2.5 flex flex-col gap-1.5 active:scale-95 transition-transform text-left"
-              style={{ background: reminderOn ? "#FFFBEB" : "#F9FAFB" }}
-              aria-label={reminderOn ? "Disable reminder" : "Enable reminder"}
+            {/* — Reminder — */}
+            <div
+              className="rounded-xl p-2.5 flex flex-col gap-1.5 text-left"
+              style={{ background: project.reminderEnabled ? "#FFFBEB" : "#F9FAFB" }}
+              aria-label="Reminder status"
             >
-              {reminderOn
+              {project.reminderEnabled
                 ? <Bell size={15} color="#B45309" />
                 : <BellOff size={15} color="#9CA3AF" />}
               <p style={{
-                color: reminderOn ? "#92400E" : "#6B7280",
+                color: project.reminderEnabled ? "#92400E" : "#6B7280",
                 fontSize: "0.8rem", fontWeight: 700, lineHeight: 1.15,
               }}>
-                {reminderOn ? "Enabled" : "Off"}
+                {project.reminderEnabled ? "Enabled" : "Disabled"}
               </p>
-              <p style={{ color: reminderOn ? "#B45309" : "#9CA3AF",
+              <p style={{ color: project.reminderEnabled ? "#B45309" : "#9CA3AF",
                 fontSize: "0.57rem", fontWeight: 600,
                 textTransform: "uppercase", letterSpacing: "0.06em" }}>
                 Reminder
               </p>
-            </button>
+            </div>
 
           </div>
         </div>
@@ -310,16 +266,9 @@ function StatTile({ label, value, color = "white", sub }: {
 type Filter = "all" | "active" | "monitoring" | "completed";
 
 export function ProjectsPage() {
-  const navigate = useNavigate();
   const { projects, loadingProjects } = useProject();
   const [filter,      setFilter]      = useState<Filter>("all");
   const [treeCounts,  setTreeCounts]  = useState<Record<string, number>>({});
-  // Local reminder toggle state — mirrors what project settings would persist
-  const [reminders, setReminders] = useState<Record<string, boolean>>(() => {
-    const init: Record<string, boolean> = {};
-    Object.keys(MONITORING_META).forEach(k => { init[k] = MONITORING_META[k].reminderEnabled; });
-    return init;
-  });
 
   // Fetch total tree count per project (lightweight — project_id only)
   useEffect(() => {
@@ -343,7 +292,7 @@ export function ProjectsPage() {
   const activeProjects = projects.filter(p => p.status === "active").length;
   const criticalCount  = projects.filter(p => p.criticalObs > 0).length;
   const dueSoonCount   = projects.filter(p => {
-    const d = parseDate(p.nextAudit);
+    const d = parseDate(p.nextInspectionDue);
     if (!d) return false;
     return daysFromToday(d) <= 14; // overdue OR within 14 days
   }).length;
@@ -482,10 +431,6 @@ export function ProjectsPage() {
               project={p}
               treeCount={treeCounts[p.uuid] ?? null}
               isSelected={false}
-              reminderOn={reminders[p.id] ?? getMonitoring(p.id).reminderEnabled}
-              onToggleReminder={() =>
-                setReminders(prev => ({ ...prev, [p.id]: !(prev[p.id] ?? getMonitoring(p.id).reminderEnabled) }))
-              }
             />
           ))
         )}
