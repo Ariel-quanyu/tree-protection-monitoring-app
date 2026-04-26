@@ -58,6 +58,12 @@ type TPMStatus  = "compliant" | "not-compliant";
 type TreeHealth = "Good" | "Fair" | "Poor" | "Dead" | "";
 type TreeDamage = "Yes" | "No" | "";
 
+function getLocalDateYYYYMMDD() {
+  const now = new Date();
+  const tzAdjusted = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
+  return tzAdjusted.toISOString().slice(0, 10);
+}
+
 // ── Measure catalogue ─────────────────────────────────────────────────────────
 
 const ALL_MEASURES = [
@@ -354,6 +360,7 @@ export function TreeDetailPage() {
   const [tpmStatus,  setTpmStatus]  = useState<TPMStatus>("compliant");
   const [health,     setHealth]     = useState<TreeHealth>("");
   const [damage,     setDamage]     = useState<TreeDamage>("");
+  const [quickInspectionDate, setQuickInspectionDate] = useState<string>(() => getLocalDateYYYYMMDD());
   const [quickVisitType, setQuickVisitType] = useState<VisitType>("Routine Visit");
   const [isQuickSaving, setIsQuickSaving] = useState(false);
   const [quickSaveError, setQuickSaveError] = useState<string | null>(null);
@@ -463,39 +470,74 @@ export function TreeDetailPage() {
     setIsQuickSaving(true);
 
     try {
-      const today = new Date().toISOString().slice(0, 10);
+      const selectedInspectionDate = quickInspectionDate;
+      const normalizedTreeId = String(
+        (tree as unknown as { treeId?: unknown; tree_id?: unknown }).treeId
+          ?? (tree as unknown as { treeId?: unknown; tree_id?: unknown }).tree_id
+          ?? tree.id,
+      ).trim();
+      console.error("Quick save context", {
+        project_id: tree.project_id,
+        tree_id: normalizedTreeId,
+        inspection_date: selectedInspectionDate,
+        visit_type: quickVisitType,
+      });
 
-      const { data: newVisit, error: newVisitError } = await supabase
+      const { data: existingVisit, error: existingVisitError } = await supabase
         .from("visits")
-        .insert({
-          project_id: tree.project_id,
-          tree_id: tree.id,
-          visit_type: quickVisitType,
-          inspection_date: today,
-          inspector_name: project.inspector?.trim() || "Site Arborist",
-          notes: "",
-        })
         .select("id")
-        .single();
+        .eq("project_id", tree.project_id)
+        .eq("inspection_date", selectedInspectionDate)
+        .eq("visit_type", quickVisitType)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
 
-      if (newVisitError) throw newVisitError;
-      if (!newVisit?.id) throw new Error("Visit was created but no id was returned.");
+      if (existingVisitError) {
+        console.error("visit insert/reuse error", existingVisitError);
+        throw existingVisitError;
+      }
 
-      const { error: treeVisitRecordError } = await supabase
+      let visitId = existingVisit?.id ?? null;
+
+      if (!visitId) {
+        const { data: createdVisit, error: createdVisitError } = await supabase
+          .from("visits")
+          .insert({
+            project_id: tree.project_id,
+            visit_type: quickVisitType,
+            inspection_date: selectedInspectionDate,
+            inspector_name: project.inspector?.trim() || "Site Arborist",
+            notes: "",
+          })
+          .select("id")
+          .single();
+
+        if (createdVisitError) {
+          console.error("visit insert/reuse error", createdVisitError);
+          throw createdVisitError;
+        }
+        if (!createdVisit?.id) throw new Error("Visit was created but no id was returned.");
+        visitId = createdVisit.id;
+      }
+      const { error: upsertTreeVisitRecordError } = await supabase
         .from("tree_visit_records")
-        .insert({
-          visit_id: newVisit.id,
+        .upsert({
+          visit_id: visitId,
           project_id: tree.project_id,
-          tree_id: String(tree.id),
+          tree_id: normalizedTreeId,
           tpm_status: tpmStatus,
           health: health || null,
           damage: damage || null,
           notes: "",
-        });
+        }, { onConflict: "visit_id,tree_id" });
 
-      if (treeVisitRecordError) throw treeVisitRecordError;
+      if (upsertTreeVisitRecordError) {
+        console.error("tree_visit_records upsert error", upsertTreeVisitRecordError);
+        throw upsertTreeVisitRecordError;
+      }
 
-      navigate(`/visits/${newVisit.id}`);
+      navigate(`/visits/${visitId}`);
     } catch (error) {
       const message = error instanceof Error
         ? error.message
@@ -644,46 +686,19 @@ export function TreeDetailPage() {
               className="rounded-2xl p-4 mb-4"
               style={{ background: "white", boxShadow: "0 1px 6px rgba(0,0,0,0.06)" }}
             >
-              <SectionLabel label="Visit Type" />
-              <select
-                value={quickVisitType}
-                onChange={(event) => setQuickVisitType(event.target.value as VisitType)}
-                className="w-full rounded-xl px-3 py-2.5"
+              <SectionLabel label="Inspection Date" />
+              <input
+                type="date"
+                value={quickInspectionDate}
+                onChange={(event) => setQuickInspectionDate(event.target.value)}
+                className="w-full rounded-xl px-3 py-2.5 mb-3"
                 style={{
                   border: "1px solid #D1D5DB",
                   background: "#F9FAFB",
                   color: "#111827",
                   fontSize: "0.82rem",
                 }}
-              >
-                {ALL_VISIT_TYPES.map((type) => (
-                  <option key={type} value={type}>
-                    {type}
-                  </option>
-                ))}
-              </select>
-              <button
-                onClick={handleQuickInspectionSave}
-                disabled={isQuickSaving}
-                className="w-full py-4 rounded-2xl flex items-center justify-center gap-2 mt-3 active:scale-[0.98] transition-all disabled:opacity-70 disabled:cursor-not-allowed"
-                style={{ background: "#1B4332" }}
-              >
-                <CheckCircle2 size={18} color="white" />
-                <span style={{ color: "white", fontSize: "0.9rem", fontWeight: 700 }}>
-                  {isQuickSaving ? "Saving..." : "Save Tree Inspection"}
-                </span>
-              </button>
-              {quickSaveError && (
-                <p style={{ color: "#B91C1C", fontSize: "0.75rem", marginTop: 8, lineHeight: 1.5 }}>
-                  {quickSaveError}
-                </p>
-              )}
-            </div>
-
-            <div
-              className="rounded-2xl p-4 mb-4"
-              style={{ background: "white", boxShadow: "0 1px 6px rgba(0,0,0,0.06)" }}
-            >
+              />
               <SectionLabel label="Visit Type" />
               <select
                 value={quickVisitType}
