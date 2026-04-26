@@ -58,32 +58,6 @@ type TPMStatus  = "compliant" | "not-compliant";
 type TreeHealth = "Good" | "Fair" | "Poor" | "Dead" | "";
 type TreeDamage = "Yes" | "No" | "";
 
-// ── Measure catalogue ─────────────────────────────────────────────────────────
-
-const ALL_MEASURES = [
-  { id: "fencing",          label: "Fencing" },
-  { id: "flagging",         label: "Flagging" },
-  { id: "ground-protection",label: "Ground Protection" },
-  { id: "trunk-protection", label: "Trunk Protection" },
-  { id: "branch-protection",label: "Branch Protection" },
-  { id: "pruning",          label: "Pruning" },
-  { id: "irrigation",       label: "Irrigation" },
-] as const;
-
-type MeasureId = typeof ALL_MEASURES[number]["id"];
-
-/** Parse a free-text measures string into a Set of measure IDs */
-function parseMeasureString(raw: string): Set<MeasureId> {
-  const lower = raw.toLowerCase();
-  const active = new Set<MeasureId>();
-  for (const m of ALL_MEASURES) {
-    // Match on first word(s) of each measure
-    const keyword = m.label.split(" ")[0].toLowerCase();
-    if (lower.includes(keyword)) active.add(m.id);
-  }
-  return active;
-}
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 type EncroachmentClass = SupabaseTree["encroachmentClass"];
@@ -132,46 +106,14 @@ function SectionLabel({ label }: { label: string }) {
 // ── Compliance card ───────────────────────────────────────────────────────────
 
 function TPMStatusCard({
-  selectedMeasures, onToggleMeasure, value, onChange,
+  value, onChange,
 }: {
-  selectedMeasures: Set<MeasureId>;
-  onToggleMeasure: (id: MeasureId) => void;
   value: TPMStatus;
   onChange: (v: TPMStatus) => void;
 }) {
   return (
     <div className="rounded-2xl p-4 mb-4"
       style={{ background: "white", boxShadow: "0 1px 6px rgba(0,0,0,0.06)" }}>
-
-      {/* ── Multi-select measure chips ── */}
-      <p style={{ color: "#9CA3AF", fontSize: "0.6rem", fontWeight: 700,
-        textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
-        Measures in place this visit
-      </p>
-      <div className="flex flex-wrap gap-2 mb-4">
-        {ALL_MEASURES.map(m => {
-          const active = selectedMeasures.has(m.id);
-          return (
-            <button
-              key={m.id}
-              onClick={() => onToggleMeasure(m.id)}
-              className="rounded-full px-3 py-1.5 flex items-center gap-1.5 transition-all active:scale-95"
-              style={{
-                background: active ? "#1B4332" : "#F9FAFB",
-                border:     `1.5px solid ${active ? "#1B4332" : "#E5E7EB"}`,
-                color:       active ? "white" : "#6B7280",
-                fontSize:   "0.73rem",
-                fontWeight:  active ? 700 : 400,
-              }}
-            >
-              {active && (
-                <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#4ADE80", flexShrink: 0, display: "inline-block" }} />
-              )}
-              {m.label}
-            </button>
-          );
-        })}
-      </div>
 
       {/* ── Compliance status ── */}
       <SectionLabel label="TPM Compliance Status" />
@@ -381,7 +323,6 @@ export function TreeDetailPage() {
   const [quickVisitType, setQuickVisitType] = useState<VisitType>("Routine Visit");
   const [isQuickSaving, setIsQuickSaving] = useState(false);
   const [quickSaveError, setQuickSaveError] = useState<string | null>(null);
-  const [selectedMeasures, setSelectedMeasures] = useState<Set<MeasureId>>(new Set());
 
   const { project } = useSelectedProject();
 
@@ -407,8 +348,6 @@ export function TreeDetailPage() {
           const mapped = mapSupabaseTree(raw, project.id);
           setTree(mapped);
           setTreeObs(parseObservations(raw.observations));
-          // Pre-populate with required baseline protection measures.
-          setSelectedMeasures(parseMeasureString(mapped.requiredMeasures.join(", ")));
         }
         setLoading(false);
       });
@@ -667,13 +606,6 @@ export function TreeDetailPage() {
 
             {/* TPM compliance */}
             <TPMStatusCard
-              selectedMeasures={selectedMeasures}
-              onToggleMeasure={(id) => {
-                const newSet = new Set(selectedMeasures);
-                if (newSet.has(id)) newSet.delete(id);
-                else newSet.add(id);
-                setSelectedMeasures(newSet);
-              }}
               value={tpmStatus}
               onChange={setTpmStatus}
             />
@@ -899,6 +831,41 @@ export function TreeDetailPage() {
                                 fontSize: "0.65rem", fontWeight: 600 }}>
                               Damage
                             </span>
+                          )}
+                        </div>
+                        <div style={{ marginTop: 8 }}>
+                          <p style={{
+                            color: "#9CA3AF",
+                            fontSize: "0.6rem",
+                            fontWeight: 700,
+                            textTransform: "uppercase",
+                            letterSpacing: "0.08em",
+                            marginBottom: 6,
+                          }}>
+                            Required Tree Protection Measures
+                          </p>
+                          {tree.requiredMeasures.length > 0 ? (
+                            <div className="flex flex-wrap gap-1.5">
+                              {tree.requiredMeasures.map((measure) => (
+                                <span
+                                  key={`${record.id}-${measure}`}
+                                  className="rounded-full px-2 py-0.5"
+                                  style={{
+                                    background: "#F0FDF4",
+                                    border: "1px solid #BBF7D0",
+                                    color: "#166534",
+                                    fontSize: "0.65rem",
+                                    fontWeight: 600,
+                                  }}
+                                >
+                                  {measure}
+                                </span>
+                              ))}
+                            </div>
+                          ) : (
+                            <p style={{ color: "#9CA3AF", fontSize: "0.7rem" }}>
+                              No required measures recorded
+                            </p>
                           )}
                         </div>
                         {record.notes && (
