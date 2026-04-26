@@ -1,9 +1,8 @@
 import { type SupabaseTree, mapSupabaseTree, type TreeStatusValue } from "../../data/treeMapper";
 import { TreeStatusBadge, EncroachmentBadge } from "../StatusBadge";
-import { type InspectionFrequency, type ProjectData } from "../../data/projectsData";
+import { type ProjectData } from "../../data/projectsData";
 import { AddTreeSheet } from "../dashboard/AddTreeSheet";
 import { useProject } from "../../context/ProjectContext";
-import { updateProjectInspectionSchedule } from "../../data/projectsApi";
 import { supabase } from "../../../lib/supabase";
 
 import React, { useState, useMemo, useEffect } from "react";
@@ -60,8 +59,6 @@ const RETENTION_CFG: Record<string, { color: string }> = {
 };
 
 const TPM_EMPTY_VALUES = new Set(["", "none", "n/a", "na", "null"]);
-const INSPECTION_FREQUENCIES: InspectionFrequency[] = ["Monthly", "2-monthly", "3-monthly"];
-
 function cleanMeasureLabel(value: string): string | null {
   const label = value.trim();
   if (!label) return null;
@@ -85,34 +82,12 @@ function getDisplayMeasures(tree: SupabaseTree): string[] {
   return parseTreeProtectionMeasures(tree.treeProtectionMeasures);
 }
 
-function parseDate(iso: string): Date | null {
-  if (!iso) return null;
-  const d = new Date(iso);
-  return isNaN(d.getTime()) ? null : d;
-}
-
-function daysFromToday(date: Date): number {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  date.setHours(0, 0, 0, 0);
-  return Math.round((date.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-}
-
-function formatDueLabel(iso: string): string {
-  const d = parseDate(iso);
-  if (!d) return "Not set";
-  const days = daysFromToday(d);
-  if (days === 0) return "Due today";
-  if (days > 0) return `In ${days}d`;
-  return `Overdue by ${Math.abs(days)}d`;
-}
-
 // ─── Project Dropdown ─────────────────────────────────────────────────────────
 
 function ProjectDropdown({
-  projects, selectedId, onSelect,
+  projects, selectedId, onSelect, treeCounts,
 }: {
-  projects: ProjectData[]; selectedId: string; onSelect: (id: string) => void;
+  projects: ProjectData[]; selectedId: string; onSelect: (id: string) => void; treeCounts: Record<string, number>;
 }) {
   const [open, setOpen] = useState(false);
   const selected = projects.find(p => p.id === selectedId) ?? projects[0];
@@ -182,7 +157,7 @@ function ProjectDropdown({
                         {p.name}
                       </p>
                       <div className="flex items-center gap-2 mt-0.5">
-                        <span style={{ color: "#9CA3AF", fontSize: "0.7rem" }}>{p.totalTrees} trees</span>
+                        <span style={{ color: "#9CA3AF", fontSize: "0.7rem" }}>{(treeCounts[p.uuid] ?? 0).toLocaleString()} trees</span>
                         <span style={{ color: "#E5E7EB" }}>·</span>
                         <span style={{ color: STATUS_COLORS[p.status], fontSize: "0.68rem",
                           fontWeight: 600, textTransform: "capitalize" }}>{p.status}</span>
@@ -444,118 +419,6 @@ function StatusStatRow({ trees }: { trees: SupabaseTree[] }) {
   );
 }
 
-function InspectionScheduleCard({
-  project,
-  onSaved,
-}: {
-  project: ProjectData;
-  onSaved: (updates: {
-    inspectionFrequency: InspectionFrequency;
-    nextInspectionDue: string;
-    reminderEnabled: boolean;
-    reminderEmail: string;
-  }) => void;
-}) {
-  const [inspectionFrequency, setInspectionFrequency] = useState<InspectionFrequency>(project.inspectionFrequency);
-  const [nextInspectionDue, setNextInspectionDue] = useState(project.nextInspectionDue);
-  const [reminderEnabled, setReminderEnabled] = useState(project.reminderEnabled);
-  const [reminderEmail, setReminderEmail] = useState(project.reminderEmail);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
-
-  useEffect(() => {
-    setInspectionFrequency(project.inspectionFrequency);
-    setNextInspectionDue(project.nextInspectionDue);
-    setReminderEnabled(project.reminderEnabled);
-    setReminderEmail(project.reminderEmail);
-  }, [project.id, project.inspectionFrequency, project.nextInspectionDue, project.reminderEnabled, project.reminderEmail]);
-
-  const handleSave = async () => {
-    setSaving(true);
-    setError(null);
-    setSaved(false);
-    try {
-      if (reminderEnabled && reminderEmail.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(reminderEmail.trim())) {
-        throw new Error("Please enter a valid reminder email.");
-      }
-      const updated = await updateProjectInspectionSchedule(project.uuid, {
-        inspectionFrequency,
-        nextInspectionDue,
-        reminderEnabled,
-        reminderEmail: reminderEmail.trim(),
-      });
-      onSaved(updated);
-      setSaved(true);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save schedule.");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="rounded-2xl p-4 mx-4 mt-4" style={{ background: "white", border: "1.5px solid #D1FAE5", boxShadow: "0 1px 6px rgba(0,0,0,0.05)" }}>
-      <div className="flex items-center justify-between gap-2 mb-3">
-        <p style={{ color: "#166534", fontSize: "0.85rem", fontWeight: 700 }}>Inspection Schedule</p>
-        <p style={{ color: "#6B7280", fontSize: "0.68rem", fontWeight: 600 }}>{formatDueLabel(nextInspectionDue)}</p>
-      </div>
-
-      <label style={{ color: "#374151", fontSize: "0.7rem", fontWeight: 600 }}>Inspection frequency</label>
-      <select
-        value={inspectionFrequency}
-        onChange={(e) => setInspectionFrequency(e.target.value as InspectionFrequency)}
-        className="w-full rounded-xl px-3 py-2.5 mt-1 mb-3"
-        style={{ border: "1px solid #D1D5DB", fontSize: "0.82rem", background: "#F9FAFB" }}
-      >
-        {INSPECTION_FREQUENCIES.map((value) => <option key={value} value={value}>{value}</option>)}
-      </select>
-
-      <label style={{ color: "#374151", fontSize: "0.7rem", fontWeight: 600 }}>Next inspection due</label>
-      <input
-        type="date"
-        value={nextInspectionDue}
-        onChange={(e) => setNextInspectionDue(e.target.value)}
-        className="w-full rounded-xl px-3 py-2.5 mt-1 mb-3"
-        style={{ border: "1px solid #D1D5DB", fontSize: "0.82rem", background: "#F9FAFB" }}
-      />
-
-      <label className="flex items-center gap-2 mb-3">
-        <input type="checkbox" checked={reminderEnabled} onChange={(e) => setReminderEnabled(e.target.checked)} />
-        <span style={{ color: "#374151", fontSize: "0.78rem", fontWeight: 600 }}>Enable reminder email</span>
-      </label>
-
-      <label style={{ color: "#374151", fontSize: "0.7rem", fontWeight: 600 }}>Reminder email</label>
-      <input
-        type="email"
-        value={reminderEmail}
-        onChange={(e) => setReminderEmail(e.target.value)}
-        disabled={!reminderEnabled}
-        placeholder="arborist@example.com"
-        className="w-full rounded-xl px-3 py-2.5 mt-1"
-        style={{
-          border: "1px solid #D1D5DB",
-          fontSize: "0.82rem",
-          background: reminderEnabled ? "#F9FAFB" : "#F3F4F6",
-          opacity: reminderEnabled ? 1 : 0.7,
-        }}
-      />
-
-      {error && <p style={{ color: "#B91C1C", fontSize: "0.72rem", marginTop: 8 }}>{error}</p>}
-      {saved && !error && <p style={{ color: "#166534", fontSize: "0.72rem", marginTop: 8 }}>Schedule saved.</p>}
-
-      <button
-        onClick={handleSave}
-        disabled={saving}
-        className="w-full rounded-xl py-2.5 mt-3 active:scale-95 transition-transform"
-        style={{ background: saving ? "#86EFAC" : "#166534", color: "white", fontSize: "0.82rem", fontWeight: 700 }}
-      >
-        {saving ? "Saving…" : "Save Schedule"}
-      </button>
-    </div>
-  );
-}
-
 // ─── No-data state ───────────────────────────────────────────────────────────
 
 function NoDataState({
@@ -651,7 +514,7 @@ export function TreesPage() {
   const [searchParams] = useSearchParams();
   const initialStatus = (searchParams.get("status") as TreeStatusValue | null) ?? "all";
 
-  const { selectedProjectId: selectedId, setSelectedProjectId, projects, updateProject } = useProject();
+  const { selectedProjectId: selectedId, setSelectedProjectId, projects } = useProject();
 
   // ── UI state ─────────────────────────────────────────────────────────────
   // ALL hooks must be declared before any conditional return (Rules of Hooks)
@@ -666,10 +529,34 @@ export function TreesPage() {
   const [trees,        setTrees]        = useState<SupabaseTree[]>([]);
   const [loadingTrees, setLoadingTrees] = useState(false);
   const [treeError,    setTreeError]    = useState<string | null>(null);
+  const [projectTreeCounts, setProjectTreeCounts] = useState<Record<string, number>>({});
 
   // Resolve selected project early so the fetch effect can read its uuid.
   // May be undefined while projects are still loading.
   const project = projects.find(p => p.id === selectedId) ?? projects[0];
+
+  useEffect(() => {
+    if (projects.length === 0) return;
+    let cancelled = false;
+
+    supabase
+      .from("trees")
+      .select("project_id")
+      .then(({ data, error }) => {
+        if (cancelled || error || !data) return;
+        const counts: Record<string, number> = {};
+        data.forEach((row) => {
+          const projectId = String(row.project_id ?? "");
+          if (!projectId) return;
+          counts[projectId] = (counts[projectId] ?? 0) + 1;
+        });
+        setProjectTreeCounts(counts);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [projects.length]);
 
   // ── Fetch trees from Supabase using the project UUID (not the slug) ───────
   useEffect(() => {
@@ -768,6 +655,7 @@ export function TreesPage() {
       <ProjectDropdown
         projects={projects}
         selectedId={selectedId}
+        treeCounts={projectTreeCounts}
         onSelect={id => {
           setSelectedProjectId(id);
           setSearch("");
@@ -834,12 +722,6 @@ export function TreesPage() {
         </div>
       </div>
 
-      <InspectionScheduleCard
-        project={project}
-        onSaved={(updates) => {
-          updateProject(project.id, updates);
-        }}
-      />
 
       {/* ── Show no-data / loading / error state when there are no trees ── */}
       {!hasTreeData ? (
