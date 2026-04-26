@@ -10,7 +10,7 @@ import { useSelectedProject } from "../../context/ProjectContext";
 import { EncroachmentBadge } from "../StatusBadge";
 import { type SupabaseTree, mapSupabaseTree } from "../../data/treeMapper";
 import {
-  VISIT_TYPE_SHORT, VISIT_TYPE_COLORS, type VisitType,
+  VISIT_TYPE_SHORT, VISIT_TYPE_COLORS, ALL_VISIT_TYPES, type VisitType,
 } from "../../data/visitsData";
 
 // ── Observation types ─────────────────────────────────────────────────────────
@@ -354,6 +354,9 @@ export function TreeDetailPage() {
   const [tpmStatus,  setTpmStatus]  = useState<TPMStatus>("compliant");
   const [health,     setHealth]     = useState<TreeHealth>("");
   const [damage,     setDamage]     = useState<TreeDamage>("");
+  const [quickVisitType, setQuickVisitType] = useState<VisitType>("Routine Visit");
+  const [isQuickSaving, setIsQuickSaving] = useState(false);
+  const [quickSaveError, setQuickSaveError] = useState<string | null>(null);
   const [selectedMeasures, setSelectedMeasures] = useState<Set<MeasureId>>(new Set());
 
   const { project } = useSelectedProject();
@@ -452,6 +455,57 @@ export function TreeDetailPage() {
     compliant:       { bg: "#DCFCE7", text: "#15803D", label: "Compliant",     icon: <CheckCircle2 size={14} /> },
     "not-compliant": { bg: "#FEE2E2", text: "#DC2626", label: "Not Compliant", icon: <XCircle size={14} /> },
   }[tpmStatus];
+
+  const handleQuickInspectionSave = async () => {
+    if (!tree || !project?.uuid) return;
+
+    setQuickSaveError(null);
+    setIsQuickSaving(true);
+
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+
+      const { data: newVisit, error: newVisitError } = await supabase
+        .from("visits")
+        .insert({
+          project_id: tree.project_id,
+          tree_id: tree.id,
+          visit_type: quickVisitType,
+          inspection_date: today,
+          inspector_name: project.inspector?.trim() || "Site Arborist",
+          notes: "",
+        })
+        .select("id")
+        .single();
+
+      if (newVisitError) throw newVisitError;
+      if (!newVisit?.id) throw new Error("Visit was created but no id was returned.");
+
+      const { error: treeVisitRecordError } = await supabase
+        .from("tree_visit_records")
+        .insert({
+          visit_id: newVisit.id,
+          project_id: tree.project_id,
+          tree_id: String(tree.id),
+          tpm_status: tpmStatus,
+          health: health || null,
+          damage: damage || null,
+          notes: "",
+        });
+
+      if (treeVisitRecordError) throw treeVisitRecordError;
+
+      navigate(`/visits/${newVisit.id}`);
+    } catch (error) {
+      const message = error instanceof Error
+        ? error.message
+        : "Failed to save quick tree inspection.";
+      setQuickSaveError(message);
+      console.error("Quick tree inspection save failed:", error);
+    } finally {
+      setIsQuickSaving(false);
+    }
+  };
 
   return (
     <div className="pb-28">
@@ -598,13 +652,53 @@ export function TreeDetailPage() {
               </span>
             </button>
 
+            <div
+              className="rounded-2xl p-4 mb-4"
+              style={{ background: "white", boxShadow: "0 1px 6px rgba(0,0,0,0.06)" }}
+            >
+              <SectionLabel label="Visit Type" />
+              <select
+                value={quickVisitType}
+                onChange={(event) => setQuickVisitType(event.target.value as VisitType)}
+                className="w-full rounded-xl px-3 py-2.5"
+                style={{
+                  border: "1px solid #D1D5DB",
+                  background: "#F9FAFB",
+                  color: "#111827",
+                  fontSize: "0.82rem",
+                }}
+              >
+                {ALL_VISIT_TYPES.map((type) => (
+                  <option key={type} value={type}>
+                    {type}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={handleQuickInspectionSave}
+                disabled={isQuickSaving}
+                className="w-full py-4 rounded-2xl flex items-center justify-center gap-2 mt-3 active:scale-[0.98] transition-all disabled:opacity-70 disabled:cursor-not-allowed"
+                style={{ background: "#1B4332" }}
+              >
+                <CheckCircle2 size={18} color="white" />
+                <span style={{ color: "white", fontSize: "0.9rem", fontWeight: 700 }}>
+                  {isQuickSaving ? "Saving..." : "Save Tree Inspection"}
+                </span>
+              </button>
+              {quickSaveError && (
+                <p style={{ color: "#B91C1C", fontSize: "0.75rem", marginTop: 8, lineHeight: 1.5 }}>
+                  {quickSaveError}
+                </p>
+              )}
+            </div>
+
             {/* Baseline disclaimer */}
             <div className="rounded-xl p-3 flex items-start gap-2"
               style={{ background: "#F0F9FF", border: "1px solid #BAE6FD" }}>
               <Info size={12} color="#0284C7" style={{ flexShrink: 0, marginTop: 1 }} />
               <p style={{ color: "#0369A1", fontSize: "0.68rem", lineHeight: 1.55 }}>
-                Compliance status above is set locally for this session.
-                Save via <strong>Start Visit</strong> to persist to the project record.
+                Use <strong>Save Tree Inspection</strong> for a quick single-tree record, or <strong>Start Visit</strong>
+                to capture a full multi-tree site visit.
               </p>
             </div>
           </div>
