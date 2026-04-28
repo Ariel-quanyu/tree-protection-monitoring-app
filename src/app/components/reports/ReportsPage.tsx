@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import { useNavigate } from "react-router";
 import {
   FileDown, AlertCircle,
@@ -52,6 +52,12 @@ type TreeVisitRecordRow = {
   tpm_status: string | null;
 };
 
+type ProjectTabRow = {
+  id: string;
+  name: string;
+  slug: string | null;
+};
+
 function normalizeStatus(raw: string | null): NormalizedStatus {
   if (!raw) return null;
   const value = raw.trim().toLowerCase().replace(/\s+/g, "_").replace(/-/g, "_");
@@ -63,17 +69,61 @@ function normalizeStatus(raw: string | null): NormalizedStatus {
 
 export function ReportsPage() {
   const navigate = useNavigate();
-  const { projects, selectedProjectId, loadingProjects } = useProject();
-  const [selectedProject, setSelectedProject] = useState<string>(selectedProjectId || "all");
+  const { selectedProjectId: globalSelectedProjectId } = useProject();
+  const [projects, setProjects] = useState<ProjectTabRow[]>([]);
+  const [loadingProjects, setLoadingProjects] = useState(true);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const hasAppliedInitialProject = useRef(false);
   const [loadingData, setLoadingData] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [visits, setVisits] = useState<VisitRow[]>([]);
   const [records, setRecords] = useState<TreeVisitRecordRow[]>([]);
 
   useEffect(() => {
-    if (!selectedProjectId || selectedProjectId === selectedProject) return;
-    setSelectedProject(selectedProjectId);
-  }, [selectedProjectId, selectedProject]);
+    let mounted = true;
+
+    const loadProjects = async () => {
+      setLoadingProjects(true);
+      try {
+        const { data, error } = await supabase
+          .from("projects")
+          .select("id, name, slug")
+          .order("name", { ascending: true });
+
+        if (error) throw error;
+        if (!mounted) return;
+
+        const typedProjects = (data ?? []) as ProjectTabRow[];
+        setProjects(typedProjects);
+        console.log(
+          "[ReportsPage] loaded projects:",
+          typedProjects.map((project) => ({ id: project.id, name: project.name, slug: project.slug })),
+        );
+      } catch (error) {
+        console.error("Failed to load projects for reports:", error);
+        if (!mounted) return;
+        setProjects([]);
+      } finally {
+        if (mounted) setLoadingProjects(false);
+      }
+    };
+
+    void loadProjects();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (hasAppliedInitialProject.current || loadingProjects) return;
+
+    const initialProject = projects.find(
+      (project) => project.id === globalSelectedProjectId || project.slug === globalSelectedProjectId,
+    );
+    setSelectedProjectId(initialProject?.id ?? null);
+    hasAppliedInitialProject.current = true;
+  }, [globalSelectedProjectId, projects, loadingProjects]);
 
   useEffect(() => {
     let mounted = true;
@@ -82,49 +132,39 @@ export function ReportsPage() {
       setLoadingData(true);
       setErrorMessage(null);
       try {
-        const selected = projects.find((project) => project.id === selectedProject);
-        const selectedProjectUuid = selected?.uuid ?? null;
-
         let visitsQuery = supabase
           .from("visits")
           .select("id, project_id, inspection_date, visit_type, inspector_name, created_at")
           .order("inspection_date", { ascending: false })
           .order("created_at", { ascending: false });
 
-        if (selectedProject !== "all" && selectedProjectUuid) {
-          visitsQuery = visitsQuery.eq("project_id", selectedProjectUuid);
+        if (selectedProjectId) {
+          visitsQuery = visitsQuery.eq("project_id", selectedProjectId);
         }
 
         const { data: visitsData, error: visitsError } = await visitsQuery;
         if (visitsError) throw visitsError;
 
-        const typedVisits = (visitsData ?? []) as VisitRow[];
-        const visitIds = typedVisits.map((visit) => visit.id);
-
-        let recordsByProjectQuery = supabase
+        let recordsQuery = supabase
           .from("tree_visit_records")
           .select("visit_id, tree_id, tpm_status");
 
-        if (selectedProject !== "all" && selectedProjectUuid) {
-          recordsByProjectQuery = recordsByProjectQuery.eq("project_id", selectedProjectUuid);
+        if (selectedProjectId) {
+          recordsQuery = recordsQuery.eq("project_id", selectedProjectId);
         }
 
-        const [{ data: allRecordsData, error: allRecordsError }, visitRecordsResult] = await Promise.all([
-          recordsByProjectQuery,
-          visitIds.length > 0
-            ? supabase
-              .from("tree_visit_records")
-              .select("visit_id, tree_id, tpm_status")
-              .in("visit_id", visitIds)
-            : Promise.resolve({ data: [], error: null }),
-        ]);
-
-        if (allRecordsError) throw allRecordsError;
-        if (visitRecordsResult.error) throw visitRecordsResult.error;
+        const { data: recordsData, error: recordsError } = await recordsQuery;
+        if (recordsError) throw recordsError;
 
         if (!mounted) return;
+        const typedVisits = (visitsData ?? []) as VisitRow[];
+        const typedRecords = (recordsData ?? []) as TreeVisitRecordRow[];
         setVisits(typedVisits);
-        setRecords(((allRecordsData ?? visitRecordsResult.data ?? []) as TreeVisitRecordRow[]));
+        setRecords(typedRecords);
+        console.log(
+          "[ReportsPage] loaded data:",
+          { selectedProjectId, visits: typedVisits.length, treeVisitRecords: typedRecords.length },
+        );
       } catch (error) {
         console.error("Failed to fetch reports data:", error);
         if (!mounted) return;
@@ -142,7 +182,7 @@ export function ReportsPage() {
     return () => {
       mounted = false;
     };
-  }, [selectedProject, projects, loadingProjects]);
+  }, [selectedProjectId, loadingProjects]);
 
   const recordsByVisitId = useMemo(() => {
     const map = new Map<string, TreeVisitRecordRow[]>();
@@ -210,12 +250,15 @@ export function ReportsPage() {
 
         <div className="flex gap-2 mt-3 overflow-x-auto" style={{ scrollbarWidth: "none" }}>
           <button
-            onClick={() => setSelectedProject("all")}
+            onClick={() => {
+              setSelectedProjectId(null);
+              console.log("[ReportsPage] selectedProjectId:", null);
+            }}
             className="flex-shrink-0 rounded-full px-3 py-1.5 transition-all"
             style={{
-              background: selectedProject === "all" ? "white" : "rgba(255,255,255,0.15)",
-              color:      selectedProject === "all" ? "#1B4332" : "rgba(255,255,255,0.85)",
-              fontSize: "0.7rem", fontWeight: selectedProject === "all" ? 700 : 500,
+              background: selectedProjectId === null ? "white" : "rgba(255,255,255,0.15)",
+              color:      selectedProjectId === null ? "#1B4332" : "rgba(255,255,255,0.85)",
+              fontSize: "0.7rem", fontWeight: selectedProjectId === null ? 700 : 500,
             }}
           >
             All Projects
@@ -223,16 +266,19 @@ export function ReportsPage() {
           {projects.map((p) => (
             <button
               key={p.id}
-              onClick={() => setSelectedProject(p.id)}
+              onClick={() => {
+                setSelectedProjectId(p.id);
+                console.log("[ReportsPage] selectedProjectId:", p.id);
+              }}
               className="flex-shrink-0 rounded-full px-3 py-1.5 transition-all"
               style={{
-                background: selectedProject === p.id ? "white" : "rgba(255,255,255,0.15)",
-                color:      selectedProject === p.id ? "#1B4332" : "rgba(255,255,255,0.85)",
-                fontSize: "0.7rem", fontWeight: selectedProject === p.id ? 700 : 500,
+                background: selectedProjectId === p.id ? "white" : "rgba(255,255,255,0.15)",
+                color:      selectedProjectId === p.id ? "#1B4332" : "rgba(255,255,255,0.85)",
+                fontSize: "0.7rem", fontWeight: selectedProjectId === p.id ? 700 : 500,
                 whiteSpace: "nowrap",
               }}
             >
-              {p.tabLabel}
+              {p.name}
             </button>
           ))}
         </div>
