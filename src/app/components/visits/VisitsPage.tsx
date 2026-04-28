@@ -5,7 +5,6 @@ import {
   Clock, User, Trees, X, Filter,
 } from "lucide-react";
 import {
-  MOCK_VISITS,
   VISIT_TYPE_SHORT,
   VISIT_TYPE_COLORS,
   type Visit,
@@ -17,16 +16,18 @@ import { supabase } from "../../../lib/supabase";
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function compliancePct(v: Visit) {
-  if (v.inspectedTrees === 0) return null;
-  const compliant = v.inspectedTrees - v.breachCount;
-  return Math.round((compliant / v.inspectedTrees) * 100);
+  const knownStatusCount = (v as VisitListItem).knownStatusCount ?? v.inspectedTrees;
+  const compliantCount = (v as VisitListItem).compliantCount ?? (v.inspectedTrees - v.breachCount);
+  if (knownStatusCount === 0) return null;
+  return Math.round((compliantCount / knownStatusCount) * 100);
 }
 
 interface VisitListItem extends Visit {
-  source: "real" | "mock";
   projectUuid: string;
   projectSlug: string;
   createdAt?: string;
+  knownStatusCount: number;
+  compliantCount: number;
 }
 
 type VisitRow = {
@@ -58,6 +59,15 @@ function normalizeVisitType(raw: string | null): VisitType {
   if (!raw) return "Routine Visit";
   if (raw in VISIT_TYPE_SHORT) return raw as VisitType;
   return "Routine Visit";
+}
+
+function normalizeTpmStatus(status: string | null): "compliant" | "breach" | "not_compliant" | "unknown" {
+  if (!status) return "unknown";
+  const normalized = status.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (normalized === "compliant") return "compliant";
+  if (normalized === "breach") return "breach";
+  if (normalized === "not_compliant") return "not_compliant";
+  return "unknown";
 }
 
 // ── Visit type badge ──────────────────────────────────────────────────────────
@@ -198,14 +208,7 @@ export function VisitsPage() {
   const { projects } = useProject();
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [projectFilter, setProjectFilter] = useState<string>("all");
-  const [visits, setVisits] = useState<VisitListItem[]>(
-    MOCK_VISITS.map((visit) => ({
-      ...visit,
-      source: "mock",
-      projectUuid: "",
-      projectSlug: visit.projectId,
-    })),
-  );
+  const [visits, setVisits] = useState<VisitListItem[]>([]);
   const [loadingVisits, setLoadingVisits] = useState(false);
   const refreshVisitsAt = (location.state as { refreshVisitsAt?: number } | null)?.refreshVisitsAt;
 
@@ -248,12 +251,29 @@ export function VisitsPage() {
           ((projectsData ?? []) as ProjectRow[]).map((project) => [project.id, project]),
         );
 
-        const recordSummaryByVisitId = new Map<string, { inspectedTrees: number; breachCount: number }>();
+        const recordSummaryByVisitId = new Map<
+          string,
+          { inspectedTrees: number; breachCount: number; compliantCount: number; knownStatusCount: number }
+        >();
         ((recordsData ?? []) as TreeVisitRecordRow[]).forEach((record) => {
           if (!record.visit_id) return;
-          const current = recordSummaryByVisitId.get(record.visit_id) ?? { inspectedTrees: 0, breachCount: 0 };
+          const current = recordSummaryByVisitId.get(record.visit_id) ?? {
+            inspectedTrees: 0,
+            breachCount: 0,
+            compliantCount: 0,
+            knownStatusCount: 0,
+          };
           current.inspectedTrees += 1;
-          if (record.tpm_status === "not_compliant" || record.tpm_status === "not-compliant" || record.tpm_status === "breach") current.breachCount += 1;
+          const normalizedStatus = normalizeTpmStatus(record.tpm_status);
+          if (normalizedStatus === "breach") {
+            current.breachCount += 1;
+            current.knownStatusCount += 1;
+          } else if (normalizedStatus === "compliant") {
+            current.compliantCount += 1;
+            current.knownStatusCount += 1;
+          } else if (normalizedStatus === "not_compliant") {
+            current.knownStatusCount += 1;
+          }
           recordSummaryByVisitId.set(record.visit_id, current);
         });
 
@@ -265,7 +285,12 @@ export function VisitsPage() {
 
         const mappedRealVisits: VisitListItem[] = typedVisits.map((row) => {
           const project = row.project_id ? projectMap.get(row.project_id) : null;
-          const summary = recordSummaryByVisitId.get(row.id) ?? { inspectedTrees: 0, breachCount: 0 };
+          const summary = recordSummaryByVisitId.get(row.id) ?? {
+            inspectedTrees: 0,
+            breachCount: 0,
+            compliantCount: 0,
+            knownStatusCount: 0,
+          };
           const projectSlug = project?.slug ?? row.project_id ?? "";
           const projectName = project?.name ?? "Unknown Project";
           const totalTrees = row.project_id ? (treeCountByProjectId.get(row.project_id) ?? 0) : 0;
@@ -286,25 +311,16 @@ export function VisitsPage() {
             breachCount: summary.breachCount,
             notes: row.notes ?? "",
             treeInspections: [],
-            source: "real",
             projectUuid: row.project_id ?? "",
             projectSlug,
             createdAt: row.created_at ?? undefined,
+            knownStatusCount: summary.knownStatusCount,
+            compliantCount: summary.compliantCount,
           };
         });
 
-        const mergedVisits: VisitListItem[] = [
-          ...mappedRealVisits,
-          ...MOCK_VISITS.map((visit) => ({
-            ...visit,
-            source: "mock" as const,
-            projectUuid: "",
-            projectSlug: visit.projectId,
-          })),
-        ];
-
         if (!mounted) return;
-        setVisits(mergedVisits);
+        setVisits(mappedRealVisits);
       } catch (error) {
         console.error("Failed to fetch visits from Supabase:", error);
       } finally {
@@ -338,9 +354,6 @@ export function VisitsPage() {
         return true;
       })
       .sort((a, b) => {
-        if (a.source !== b.source) {
-          return a.source === "real" ? -1 : 1;
-        }
         const dateDelta = new Date(b.date).getTime() - new Date(a.date).getTime();
         if (dateDelta !== 0) return dateDelta;
         return new Date(b.createdAt ?? b.date).getTime() - new Date(a.createdAt ?? a.date).getTime();
@@ -468,6 +481,22 @@ export function VisitsPage() {
             <p style={{ color: "#6B7280", fontSize: "0.85rem", fontWeight: 500 }}>
               Loading visits…
             </p>
+          </div>
+        ) : visits.length === 0 ? (
+          <div className="rounded-2xl px-4 py-10 flex flex-col items-center gap-3 text-center"
+            style={{ background: "#F9FAFB", border: "1px dashed #E5E7EB" }}>
+            <ClipboardCheck size={32} color="#D1D5DB" />
+            <p style={{ color: "#6B7280", fontSize: "0.85rem", fontWeight: 500 }}>
+              No visits recorded yet. Start a new visit to begin monitoring compliance.
+            </p>
+            <button
+              onClick={() => navigate("/visits/new")}
+              className="flex items-center gap-2 rounded-2xl px-4 py-2.5 active:scale-95 transition-transform"
+              style={{ background: "#1B4332" }}
+            >
+              <ClipboardCheck size={14} color="white" />
+              <span style={{ color: "white", fontSize: "0.8rem", fontWeight: 700 }}>Start First Visit</span>
+            </button>
           </div>
         ) : filtered.length === 0 ? (
           <div className="rounded-2xl px-4 py-10 flex flex-col items-center gap-3 text-center"
