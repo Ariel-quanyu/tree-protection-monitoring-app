@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { useParams, useNavigate } from "react-router";
 import {
   ChevronLeft, ClipboardList, TreePine, Shield,
@@ -31,12 +31,18 @@ interface TreeVisitRecord {
   health: string | null;
   damage: string | null;
   notes: string | null;
+  photo_urls: string[] | null;
   created_at: string;
   visits?: {
     id: string;
     visit_type: string | null;
     inspection_date: string | null;
   } | null;
+}
+
+interface SelectedPhoto {
+  file: File;
+  previewUrl: string;
 }
 
 function parseObservations(raw: unknown): EmbeddedObs[] {
@@ -260,21 +266,56 @@ function DamageCard({ value, onChange }: { value: TreeDamage; onChange: (v: Tree
 
 // ── Photo placeholder card ────────────────────────────────────────────────────
 
-function PhotoCard() {
+function PhotoCard({
+  selectedPhotos,
+  onCardClick,
+  fileSelectionError,
+}: {
+  selectedPhotos: SelectedPhoto[];
+  onCardClick: () => void;
+  fileSelectionError: string | null;
+}) {
   return (
     <div className="rounded-2xl p-4 mb-4"
       style={{ background: "white", boxShadow: "0 1px 6px rgba(0,0,0,0.06)" }}>
       <SectionLabel label="Photos" />
       <button
+        type="button"
+        onClick={onCardClick}
         className="w-full rounded-xl py-5 flex flex-col items-center gap-2 active:opacity-70 transition-opacity"
         style={{ background: "#F9FAFB", border: "1.5px dashed #D1D5DB" }}
       >
-        <Camera size={22} color="#9CA3AF" />
-        <span style={{ color: "#6B7280", fontSize: "0.78rem" }}>Tap to add photos</span>
-        <span style={{ color: "#9CA3AF", fontSize: "0.65rem" }}>
-          Camera roll · JPG / PNG
-        </span>
+        {selectedPhotos.length === 0 ? (
+          <>
+            <Camera size={22} color="#9CA3AF" />
+            <span style={{ color: "#6B7280", fontSize: "0.78rem" }}>Tap to add photos</span>
+            <span style={{ color: "#9CA3AF", fontSize: "0.65rem" }}>
+              Camera roll · JPG / PNG
+            </span>
+          </>
+        ) : (
+          <div className="w-full">
+            <div className="grid grid-cols-3 gap-2">
+              {selectedPhotos.map((photo, index) => (
+                <img
+                  key={`${photo.file.name}-${index}`}
+                  src={photo.previewUrl}
+                  alt={`Selected upload ${index + 1}`}
+                  className="w-full h-20 object-cover rounded-lg"
+                />
+              ))}
+            </div>
+            <span style={{ color: "#6B7280", fontSize: "0.72rem", marginTop: 10, display: "block" }}>
+              Tap to add or replace photos
+            </span>
+          </div>
+        )}
       </button>
+      {fileSelectionError && (
+        <p style={{ color: "#B91C1C", fontSize: "0.75rem", marginTop: 8, lineHeight: 1.5 }}>
+          {fileSelectionError}
+        </p>
+      )}
     </div>
   );
 }
@@ -323,6 +364,10 @@ export function TreeDetailPage() {
   const [quickVisitType, setQuickVisitType] = useState<VisitType>("Routine Visit");
   const [isQuickSaving, setIsQuickSaving] = useState(false);
   const [quickSaveError, setQuickSaveError] = useState<string | null>(null);
+  const [selectedPhotos, setSelectedPhotos] = useState<SelectedPhoto[]>([]);
+  const [fileSelectionError, setFileSelectionError] = useState<string | null>(null);
+  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const { project } = useSelectedProject();
 
@@ -363,7 +408,7 @@ export function TreeDetailPage() {
 
     supabase
       .from("tree_visit_records")
-      .select("id, visit_id, project_id, tree_id, tpm_status, health, damage, notes, created_at, visits(id, visit_type, inspection_date)")
+      .select("id, visit_id, project_id, tree_id, tpm_status, health, damage, notes, photo_urls, created_at, visits(id, visit_type, inspection_date)")
       .eq("project_id", projectUuid)
       .eq("tree_id", routeTreeId)
       .order("created_at", { ascending: false })
@@ -379,6 +424,52 @@ export function TreeDetailPage() {
 
     return () => { cancelled = true; };
   }, [project?.uuid, routeTreeId]);
+
+  useEffect(() => {
+    return () => {
+      selectedPhotos.forEach((photo) => URL.revokeObjectURL(photo.previewUrl));
+    };
+  }, [selectedPhotos]);
+
+  const acceptedMimeTypes = useMemo(() => new Set(["image/png", "image/jpeg", "image/jpg"]), []);
+
+  const handlePhotoCardClick = () => {
+    setFileSelectionError(null);
+    fileInputRef.current?.click();
+  };
+
+  const handleFileSelection = (event: React.ChangeEvent<HTMLInputElement>) => {
+    try {
+      const files = Array.from(event.target.files ?? []);
+      selectedPhotos.forEach((photo) => URL.revokeObjectURL(photo.previewUrl));
+
+      if (files.length === 0) {
+        setSelectedPhotos([]);
+        return;
+      }
+
+      const invalidFile = files.find((file) => !acceptedMimeTypes.has(file.type));
+      if (invalidFile) {
+        setSelectedPhotos([]);
+        setFileSelectionError("Please select JPG or PNG image files only.");
+        event.target.value = "";
+        return;
+      }
+
+      const nextPhotos = files.map((file) => ({
+        file,
+        previewUrl: URL.createObjectURL(file),
+      }));
+      setSelectedPhotos(nextPhotos);
+      setFileSelectionError(null);
+    } catch (error) {
+      setSelectedPhotos([]);
+      setFileSelectionError("Failed to select photos.");
+      console.error("Photo selection failed:", error);
+    } finally {
+      event.target.value = "";
+    }
+  };
 
   if (!project || loading) return <LoadingSkeleton />;
 
@@ -429,6 +520,34 @@ export function TreeDetailPage() {
     try {
       const normalizedTreeId = String(tree.id).trim();
       const projectId = tree.project_id ?? project?.uuid;
+      let photoUrls: string[] = [];
+
+      if (selectedPhotos.length > 0) {
+        const uploadResults = await Promise.all(
+          selectedPhotos.map(async ({ file }) => {
+            const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+            const filePath = `${projectId}/${normalizedTreeId}/${Date.now()}-${safeName}`;
+            const { error: uploadError } = await supabase
+              .storage
+              .from("tree-photos")
+              .upload(filePath, file, { upsert: false });
+
+            if (uploadError) {
+              console.error("Supabase storage upload error:", uploadError);
+              throw new Error("Failed to upload photos.");
+            }
+
+            const { data: publicData } = supabase
+              .storage
+              .from("tree-photos")
+              .getPublicUrl(filePath);
+
+            return publicData.publicUrl;
+          }),
+        );
+
+        photoUrls = uploadResults;
+      }
 
       const { data: existingVisit, error: existingVisitError } = await supabase
         .from("visits")
@@ -472,6 +591,7 @@ export function TreeDetailPage() {
           tpm_status: tpmStatus,
           health: health || null,
           damage: damage || null,
+          photo_urls: photoUrls,
           notes: "",
         }, { onConflict: "visit_id,tree_id" });
 
@@ -617,7 +737,19 @@ export function TreeDetailPage() {
             <DamageCard value={damage} onChange={setDamage} />
 
             {/* Photos */}
-            <PhotoCard />
+            <PhotoCard
+              selectedPhotos={selectedPhotos}
+              onCardClick={handlePhotoCardClick}
+              fileSelectionError={fileSelectionError}
+            />
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/jpg"
+              multiple
+              onChange={handleFileSelection}
+              style={{ display: "none" }}
+            />
 
             <div
               className="rounded-2xl p-4 mb-4"
@@ -783,6 +915,8 @@ export function TreeDetailPage() {
                 const cfg = VISIT_TYPE_COLORS[visitType];
                 const isBreach = record.tpm_status === "not-compliant";
                 const eventDate = record.visits?.inspection_date ?? record.created_at;
+                const photoUrls = Array.isArray(record.photo_urls) ? record.photo_urls.filter(Boolean) : [];
+                const hasPhotos = photoUrls.length > 0;
                 return (
                   <div
                     key={record.id}
@@ -875,7 +1009,36 @@ export function TreeDetailPage() {
                           </p>
                         )}
                       </div>
-                      <ChevronRight size={13} color="#D1D5DB" style={{ flexShrink: 0, opacity: 0.5 }} />
+                      <div className="flex items-center gap-2">
+                        {hasPhotos && (
+                          <button
+                            type="button"
+                            onClick={() => setPreviewImageUrl(photoUrls[0])}
+                            className="relative h-14 w-14 rounded-lg overflow-hidden border"
+                            style={{ borderColor: "#E5E7EB", flexShrink: 0 }}
+                          >
+                            <img
+                              src={photoUrls[0]}
+                              alt="Visit photo"
+                              className="h-full w-full object-cover"
+                            />
+                            {photoUrls.length > 1 && (
+                              <span
+                                className="absolute bottom-1 right-1 rounded-full px-1.5 py-0.5"
+                                style={{
+                                  background: "rgba(17,24,39,0.8)",
+                                  color: "white",
+                                  fontSize: "0.6rem",
+                                  fontWeight: 700,
+                                }}
+                              >
+                                +{photoUrls.length - 1}
+                              </span>
+                            )}
+                          </button>
+                        )}
+                        <ChevronRight size={13} color="#D1D5DB" style={{ flexShrink: 0, opacity: 0.5 }} />
+                      </div>
                     </div>
                   </div>
                 );
@@ -884,6 +1047,33 @@ export function TreeDetailPage() {
           </div>
         )}
       </div>
+      {previewImageUrl && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: "rgba(0,0,0,0.7)" }}
+          onClick={() => setPreviewImageUrl(null)}
+        >
+          <div
+            className="max-w-md w-full rounded-xl overflow-hidden"
+            style={{ background: "#111827" }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <img
+              src={previewImageUrl}
+              alt="Preview"
+              className="w-full max-h-[70vh] object-contain"
+            />
+            <button
+              type="button"
+              className="w-full py-2.5"
+              style={{ color: "white", fontSize: "0.82rem", borderTop: "1px solid rgba(255,255,255,0.2)" }}
+              onClick={() => setPreviewImageUrl(null)}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
