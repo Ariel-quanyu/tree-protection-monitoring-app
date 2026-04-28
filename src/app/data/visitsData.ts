@@ -22,6 +22,7 @@ export interface TreeInspection {
   health: "Good" | "Fair" | "Poor" | "Dead" | "";
   damage: "Yes" | "No" | "";
   notes: string;
+  photoUrls?: string[];
 }
 
 export interface Visit {

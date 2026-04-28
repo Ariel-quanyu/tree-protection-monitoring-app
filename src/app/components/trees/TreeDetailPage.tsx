@@ -366,7 +366,8 @@ export function TreeDetailPage() {
   const [quickSaveError, setQuickSaveError] = useState<string | null>(null);
   const [selectedPhotos, setSelectedPhotos] = useState<SelectedPhoto[]>([]);
   const [fileSelectionError, setFileSelectionError] = useState<string | null>(null);
-  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
+  const [previewPhotos, setPreviewPhotos] = useState<string[]>([]);
+  const [previewPhotoIndex, setPreviewPhotoIndex] = useState(0);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const { project } = useSelectedProject();
@@ -436,6 +437,17 @@ export function TreeDetailPage() {
   const handlePhotoCardClick = () => {
     setFileSelectionError(null);
     fileInputRef.current?.click();
+  };
+
+  const closePreview = () => {
+    setPreviewPhotos([]);
+    setPreviewPhotoIndex(0);
+  };
+
+  const openPreview = (photoUrls: string[], startIndex = 0) => {
+    if (photoUrls.length === 0) return;
+    setPreviewPhotos(photoUrls);
+    setPreviewPhotoIndex(Math.min(Math.max(startIndex, 0), photoUrls.length - 1));
   };
 
   const handleFileSelection = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -1013,7 +1025,7 @@ export function TreeDetailPage() {
                         {hasPhotos && (
                           <button
                             type="button"
-                            onClick={() => setPreviewImageUrl(photoUrls[0])}
+                            onClick={() => openPreview(photoUrls)}
                             className="relative h-14 w-14 rounded-lg overflow-hidden border"
                             style={{ borderColor: "#E5E7EB", flexShrink: 0 }}
                           >
@@ -1047,27 +1059,72 @@ export function TreeDetailPage() {
           </div>
         )}
       </div>
-      {previewImageUrl && (
+      {previewPhotos.length > 0 && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center p-4"
           style={{ background: "rgba(0,0,0,0.7)" }}
-          onClick={() => setPreviewImageUrl(null)}
+          onClick={closePreview}
         >
           <div
             className="max-w-md w-full rounded-xl overflow-hidden"
             style={{ background: "#111827" }}
             onClick={(event) => event.stopPropagation()}
           >
-            <img
-              src={previewImageUrl}
-              alt="Preview"
-              className="w-full max-h-[70vh] object-contain"
-            />
+            <div className="relative">
+              <img
+                src={previewPhotos[previewPhotoIndex]}
+                alt={`Preview ${previewPhotoIndex + 1}`}
+                className="w-full max-h-[70vh] object-contain"
+              />
+              {previewPhotos.length > 1 && (
+                <>
+                  <button
+                    type="button"
+                    className="absolute left-2 top-1/2 -translate-y-1/2 rounded-full p-2"
+                    style={{ background: "rgba(17,24,39,0.7)", color: "white" }}
+                    onClick={() =>
+                      setPreviewPhotoIndex((current) =>
+                        current === 0 ? previewPhotos.length - 1 : current - 1
+                      )
+                    }
+                    aria-label="Previous photo"
+                  >
+                    <ChevronLeft size={18} />
+                  </button>
+                  <button
+                    type="button"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full p-2"
+                    style={{ background: "rgba(17,24,39,0.7)", color: "white" }}
+                    onClick={() =>
+                      setPreviewPhotoIndex((current) =>
+                        current === previewPhotos.length - 1 ? 0 : current + 1
+                      )
+                    }
+                    aria-label="Next photo"
+                  >
+                    <ChevronRight size={18} />
+                  </button>
+                </>
+              )}
+              {previewPhotos.length > 1 && (
+                <span
+                  className="absolute bottom-2 right-2 rounded-full px-2 py-0.5"
+                  style={{
+                    background: "rgba(17,24,39,0.8)",
+                    color: "white",
+                    fontSize: "0.68rem",
+                    fontWeight: 700,
+                  }}
+                >
+                  {previewPhotoIndex + 1}/{previewPhotos.length}
+                </span>
+              )}
+            </div>
             <button
               type="button"
               className="w-full py-2.5"
               style={{ color: "white", fontSize: "0.82rem", borderTop: "1px solid rgba(255,255,255,0.2)" }}
-              onClick={() => setPreviewImageUrl(null)}
+              onClick={closePreview}
             >
               Close
             </button>

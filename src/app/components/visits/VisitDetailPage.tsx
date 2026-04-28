@@ -45,6 +45,17 @@ export function VisitDetailPage() {
   const [loadingVisit, setLoadingVisit] = useState(true);
   const [deletingVisit, setDeletingVisit] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [previewPhotos, setPreviewPhotos] = useState<string[]>([]);
+  const [previewPhotoIndex, setPreviewPhotoIndex] = useState(0);
+
+  interface TreeVisitRecordRow {
+    tree_id: string | null;
+    tpm_status: "compliant" | "not-compliant" | null;
+    health: string | null;
+    damage: string | null;
+    notes: string | null;
+    photo_urls: string[] | null;
+  }
 
   useEffect(() => {
     let mounted = true;
@@ -89,7 +100,7 @@ export function VisitDetailPage() {
             : Promise.resolve({ data: null, error: null }),
           supabase
             .from("tree_visit_records")
-            .select("tree_id, tpm_status, health, damage, notes")
+            .select("tree_id, tpm_status, health, damage, notes, photo_urls")
             .eq("visit_id", id),
           projectId
             ? supabase
@@ -130,9 +141,10 @@ export function VisitDetailPage() {
           }
         }
 
-        const normalizedTreeInspections: TreeInspection[] = (treeRecords ?? []).map((record) => {
+        const normalizedTreeInspections: TreeInspection[] = ((treeRecords ?? []) as TreeVisitRecordRow[]).map((record) => {
           const normalizedTreeId = record.tree_id == null ? "" : String(record.tree_id).trim();
           const treeMeta = normalizedTreeId ? treeMetaMap.get(normalizedTreeId) : null;
+          const photoUrls = Array.isArray(record.photo_urls) ? record.photo_urls.filter(Boolean) : [];
 
           return {
             treeId: normalizedTreeId || "Unknown",
@@ -149,6 +161,7 @@ export function VisitDetailPage() {
               ? record.damage
               : "",
             notes: record.notes ?? "",
+            photoUrls,
           };
         });
 
@@ -242,6 +255,17 @@ export function VisitDetailPage() {
     } finally {
       setDeletingVisit(false);
     }
+  };
+
+  const closePreview = () => {
+    setPreviewPhotos([]);
+    setPreviewPhotoIndex(0);
+  };
+
+  const openPreview = (photoUrls: string[], startIndex = 0) => {
+    if (photoUrls.length === 0) return;
+    setPreviewPhotos(photoUrls);
+    setPreviewPhotoIndex(Math.min(Math.max(startIndex, 0), photoUrls.length - 1));
   };
 
   return (
@@ -472,6 +496,8 @@ export function VisitDetailPage() {
                 const tpm   = TPM_COLORS[insp.tpmCompliance];
                 const hlth  = HEALTH_COLORS[insp.health];
                 const isBreach = insp.tpmCompliance === "not-compliant";
+                const photoUrls = Array.isArray(insp.photoUrls) ? insp.photoUrls.filter(Boolean) : [];
+                const hasPhotos = photoUrls.length > 0;
                 return (
                   <div key={insp.treeId}
                     className="rounded-2xl p-4"
@@ -500,11 +526,40 @@ export function VisitDetailPage() {
                           {insp.location}
                         </p>
                       </div>
-                      <span className="rounded-full px-2 py-0.5 flex-shrink-0"
-                        style={{ background: tpm.bg, color: tpm.text,
-                          fontSize: "0.62rem", fontWeight: 700 }}>
-                        {tpm.label}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        {hasPhotos && (
+                          <button
+                            type="button"
+                            onClick={() => openPreview(photoUrls)}
+                            className="relative h-14 w-14 rounded-lg overflow-hidden border"
+                            style={{ borderColor: "#E5E7EB", flexShrink: 0 }}
+                          >
+                            <img
+                              src={photoUrls[0]}
+                              alt="Tree inspection photo"
+                              className="h-full w-full object-cover"
+                            />
+                            {photoUrls.length > 1 && (
+                              <span
+                                className="absolute bottom-1 right-1 rounded-full px-1.5 py-0.5"
+                                style={{
+                                  background: "rgba(17,24,39,0.8)",
+                                  color: "white",
+                                  fontSize: "0.6rem",
+                                  fontWeight: 700,
+                                }}
+                              >
+                                +{photoUrls.length - 1}
+                              </span>
+                            )}
+                          </button>
+                        )}
+                        <span className="rounded-full px-2 py-0.5 flex-shrink-0"
+                          style={{ background: tpm.bg, color: tpm.text,
+                            fontSize: "0.62rem", fontWeight: 700 }}>
+                          {tpm.label}
+                        </span>
+                      </div>
                     </div>
 
                     {!insp.noChange && (insp.health || insp.damage) && (
@@ -543,6 +598,65 @@ export function VisitDetailPage() {
           )
         )}
       </div>
+      {previewPhotos.length > 0 && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: "rgba(0,0,0,0.7)" }}
+          onClick={closePreview}
+        >
+          <div
+            className="max-w-md w-full rounded-xl overflow-hidden"
+            style={{ background: "#111827" }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="relative">
+              <img
+                src={previewPhotos[previewPhotoIndex]}
+                alt={`Preview ${previewPhotoIndex + 1}`}
+                className="w-full max-h-[70vh] object-contain"
+              />
+              {previewPhotos.length > 1 && (
+                <>
+                  <button
+                    type="button"
+                    className="absolute left-2 top-1/2 -translate-y-1/2 rounded-full p-2"
+                    style={{ background: "rgba(17,24,39,0.7)", color: "white" }}
+                    onClick={() =>
+                      setPreviewPhotoIndex((current) =>
+                        current === 0 ? previewPhotos.length - 1 : current - 1
+                      )
+                    }
+                    aria-label="Previous photo"
+                  >
+                    <ChevronLeft size={18} />
+                  </button>
+                  <button
+                    type="button"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full p-2"
+                    style={{ background: "rgba(17,24,39,0.7)", color: "white" }}
+                    onClick={() =>
+                      setPreviewPhotoIndex((current) =>
+                        current === previewPhotos.length - 1 ? 0 : current + 1
+                      )
+                    }
+                    aria-label="Next photo"
+                  >
+                    <ChevronRight size={18} />
+                  </button>
+                </>
+              )}
+            </div>
+            <button
+              type="button"
+              className="w-full py-2.5"
+              style={{ color: "white", fontSize: "0.82rem", borderTop: "1px solid rgba(255,255,255,0.2)" }}
+              onClick={closePreview}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
