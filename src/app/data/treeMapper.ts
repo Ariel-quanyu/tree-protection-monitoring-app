@@ -91,6 +91,7 @@ export interface SupabaseTree {
 
   // ── Retention ───────────────────────────────────────────────────────────────
   retentionStatus: string;       // retention_status
+  currentStatus: string;         // current_status
   treeProtectionMeasures: string; // tree_protection_measures  ("" when none / "None")
   requiredMeasures: string[];    // required_measures text[] baseline protection requirements
 
@@ -199,6 +200,7 @@ export function mapSupabaseTree(
 
     // Retention
     retentionStatus:        String(row.retention_status ?? ""),
+    currentStatus:          String(row.current_status ?? ""),
     treeProtectionMeasures: normalise(row.tree_protection_measures),
     requiredMeasures:       normaliseStringArray(row.required_measures),
 
