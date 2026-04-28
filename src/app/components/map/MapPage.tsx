@@ -15,19 +15,24 @@ import { type SupabaseTree, mapSupabaseTree } from "../../data/treeMapper";
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 type MapMode       = "sites" | "trees";
-type StatusFilter  = "all" | "compliant" | "not-compliant";
+type StatusFilter  = "all" | "compliant" | "not-compliant" | "breach";
 type SymbologyMode = "none" | "nrz" | "srz" | "dsh";
+type TPMStatus = "compliant" | "not_compliant" | "breach";
 
 // ── Colour helpers: binary compliance ────────────────────────────────────────
 
-function complianceColor(uiStatus: string): string {
-  return uiStatus === "compliant" ? "#16A34A" : "#DC2626";
+function complianceColor(status: TPMStatus): string {
+  if (status === "compliant") return "#16A34A";
+  if (status === "breach") return "#991B1B";
+  return "#DC2626";
 }
-function complianceBg(uiStatus: string): string {
-  return uiStatus === "compliant" ? "#DCFCE7" : "#FEE2E2";
+function complianceBg(status: TPMStatus): string {
+  return status === "compliant" ? "#DCFCE7" : "#FEE2E2";
 }
-function complianceLabel(uiStatus: string): string {
-  return uiStatus === "compliant" ? "Compliant" : "Not Compliant";
+function complianceLabel(status: TPMStatus): string {
+  if (status === "compliant") return "Compliant";
+  if (status === "breach") return "Breach";
+  return "Not Compliant";
 }
 
 // ── Project status colours ────────────────────────────────────────────────────
@@ -60,6 +65,7 @@ const STATIC_CENTRES: Record<string, [number, number]> = {};
 const LEGEND_ITEMS = [
   { label: "Compliant",     color: "#16A34A" },
   { label: "Not Compliant", color: "#DC2626" },
+  { label: "Breach",        color: "#991B1B" },
 ];
 
 // ── Project abbreviation helpers ─────────────────────────────────────────────
@@ -208,6 +214,7 @@ export function MapPage() {
 
   // ── Tree data (selected project — full rows for tree-mode markers) ─────────
   const [allTrees,     setAllTrees]     = useState<SupabaseTree[]>([]);
+  const [treeStatusById, setTreeStatusById] = useState<Map<string, TPMStatus>>(new Map());
   const [loadingTrees, setLoadingTrees] = useState(false);
   const [treeError,    setTreeError]    = useState<string | null>(null);
 
@@ -313,12 +320,49 @@ export function MapPage() {
     return () => { cancelled = true; };
   }, [project?.uuid, project?.id]);
 
+  useEffect(() => {
+    const uuid = project?.uuid;
+    if (!uuid || allTrees.length === 0) {
+      setTreeStatusById(new Map());
+      return;
+    }
+    let cancelled = false;
+    const treeIds = allTrees.map((tree) => tree.id);
+    supabase
+      .from("tree_visit_records")
+      .select("tree_id, tpm_status, created_at")
+      .eq("project_id", uuid)
+      .in("tree_id", treeIds)
+      .order("created_at", { ascending: false })
+      .then(({ data, error }) => {
+        if (cancelled || error) return;
+        const next = new Map<string, TPMStatus>();
+        for (const row of (data ?? []) as { tree_id: string | null; tpm_status: string | null }[]) {
+          const treeId = String(row.tree_id ?? "").trim();
+          if (!treeId || next.has(treeId)) continue;
+          if (row.tpm_status === "compliant" || row.tpm_status === "not_compliant" || row.tpm_status === "breach" || row.tpm_status === "not-compliant") {
+            next.set(treeId, row.tpm_status === "not-compliant" ? "not_compliant" : row.tpm_status);
+          }
+        }
+        setTreeStatusById(next);
+      });
+    return () => { cancelled = true; };
+  }, [project?.uuid, allTrees]);
+
   // ── Derived data ──────────────────────────────────────────────────────────
+  const treeComplianceStatus = (tree: SupabaseTree): TPMStatus => {
+    return treeStatusById.get(tree.id) ?? "compliant";
+  };
+
   const { filteredTrees, focusTree } = useMemo(() => {
     const base =
       statusFilter === "all"           ? allTrees :
-      statusFilter === "compliant"     ? allTrees.filter(t => t.uiStatus === "compliant") :
-                                         allTrees.filter(t => t.uiStatus !== "compliant");
+      statusFilter === "compliant"     ? allTrees.filter(t => treeComplianceStatus(t) === "compliant") :
+      statusFilter === "breach"        ? allTrees.filter(t => treeComplianceStatus(t) === "breach") :
+                                         allTrees.filter(t => {
+                                           const status = treeComplianceStatus(t);
+                                           return status === "not_compliant" || status === "breach";
+                                         });
     if (!search.trim()) return { filteredTrees: base, focusTree: null };
     const q = search.toLowerCase();
     const m = base.filter(t =>
@@ -327,16 +371,20 @@ export function MapPage() {
       t.commonName.toLowerCase().includes(q)
     );
     return { filteredTrees: m, focusTree: m[0] ?? null };
-  }, [allTrees, statusFilter, search]);
+  }, [allTrees, statusFilter, search, treeStatusById]);
 
   const searchActive = search.trim() !== "";
   const matchSet     = useMemo(() => new Set(filteredTrees.map(t => t.id)), [filteredTrees]);
 
   const stats = useMemo(() => ({
     total:        allTrees.length,
-    compliant:    allTrees.filter(t => t.uiStatus === "compliant").length,
-    notCompliant: allTrees.filter(t => t.uiStatus !== "compliant").length,
-  }), [allTrees]);
+    compliant:    allTrees.filter(t => treeComplianceStatus(t) === "compliant").length,
+    breaches:     allTrees.filter(t => treeComplianceStatus(t) === "breach").length,
+    notCompliant: allTrees.filter(t => {
+      const status = treeComplianceStatus(t);
+      return status === "not_compliant" || status === "breach";
+    }).length,
+  }), [allTrees, treeStatusById]);
 
   const hasTreeData = !loadingTrees && allTrees.length > 0;
   const modified    = statusFilter !== "all" || symbology !== "none";
@@ -432,7 +480,8 @@ export function MapPage() {
         const centre = STATIC_CENTRES[proj.id] ?? projectCentroids.get(proj.id);
         if (!centre) continue; // no GPS data for this project yet — skip silently
 
-        const statusColor = PROJECT_STATUS_COLOR[proj.status] ?? "#6B7280";
+        const projectHasBreach = proj.id === project.id && allTrees.some((tree) => treeComplianceStatus(tree) === "breach");
+        const statusColor = projectHasBreach ? "#991B1B" : (PROJECT_STATUS_COLOR[proj.status] ?? "#6B7280");
         const isSelected  = proj.id === project.id;
         const abbrev      = makeProjectAbbrev(proj.id, proj.name);
         const hasData     = projectsWithData.has(proj.id);
@@ -457,10 +506,12 @@ export function MapPage() {
       if (loadingTrees || allTrees.length === 0) return;
 
       for (const tree of allTrees) {
-        if (statusFilter === "compliant"     && tree.uiStatus !== "compliant") continue;
-        if (statusFilter === "not-compliant" && tree.uiStatus === "compliant") continue;
+        const tpmStatus = treeComplianceStatus(tree);
+        if (statusFilter === "compliant" && tpmStatus !== "compliant") continue;
+        if (statusFilter === "breach" && tpmStatus !== "breach") continue;
+        if (statusFilter === "not-compliant" && !(tpmStatus === "not_compliant" || tpmStatus === "breach")) continue;
 
-        const color      = complianceColor(tree.uiStatus);
+        const color      = complianceColor(tpmStatus);
         const inSearch   = !searchActive || matchSet.has(tree.id);
         const isSelected = selectedTree?.id === tree.id;
         const radius     = symbology === "dsh"
@@ -501,7 +552,7 @@ export function MapPage() {
   }, [
     mapMode, allTrees, loadingTrees, statusFilter, symbology,
     searchActive, matchSet, selectedTree,
-    project?.id, projects, projectsWithData, projectCentroids,
+    project?.id, projects, projectsWithData, projectCentroids, treeStatusById,
   ]);
 
   // ── Effect 4: Pan to search focus ─────────────────────────────────────────
@@ -935,6 +986,7 @@ export function MapPage() {
                     { value: "all",           label: "All" },
                     { value: "compliant",     label: "Compliant" },
                     { value: "not-compliant", label: "Not Compliant" },
+                    { value: "breach",        label: "Breach" },
                   ]}
                 />
                 <ChipSelect
@@ -974,6 +1026,7 @@ export function MapPage() {
               [
                 { label: "Compliant",     count: stats.compliant,    color: "#16A34A" },
                 { label: "Not Compliant", count: stats.notCompliant, color: "#DC2626" },
+                { label: "Breach",        count: stats.breaches,     color: "#991B1B" },
                 { label: "Total",         count: stats.total,        color: "#374151" },
               ].map((s, i) => (
                 <div key={s.label} className="flex-1 flex flex-col items-center py-2.5"
@@ -1024,7 +1077,7 @@ export function MapPage() {
             <div className="mx-4 mt-3 rounded-2xl overflow-hidden"
               style={{ boxShadow: "0 4px 18px rgba(0,0,0,0.10)", border: "1.5px solid #F3F4F6" }}>
               {/* Compliance colour bar */}
-              <div style={{ height: 4, background: complianceColor(selectedTree.uiStatus) }} />
+              <div style={{ height: 4, background: complianceColor(treeComplianceStatus(selectedTree)) }} />
               <div className="p-4" style={{ background: "white" }}>
                 {/* Header */}
                 <div className="flex items-start justify-between gap-3 mb-3">
@@ -1037,11 +1090,11 @@ export function MapPage() {
                       </span>
                       <span className="px-2 py-0.5 rounded-full flex-shrink-0"
                         style={{
-                          background: complianceBg(selectedTree.uiStatus),
-                          color: complianceColor(selectedTree.uiStatus),
+                          background: complianceBg(treeComplianceStatus(selectedTree)),
+                          color: complianceColor(treeComplianceStatus(selectedTree)),
                           fontSize: "0.66rem", fontWeight: 700,
                         }}>
-                        {complianceLabel(selectedTree.uiStatus)}
+                        {complianceLabel(treeComplianceStatus(selectedTree))}
                       </span>
                     </div>
                     <p style={{ color: "#111827", fontSize: "0.88rem", fontWeight: 700,
@@ -1165,7 +1218,7 @@ export function MapPage() {
               </p>
               <div className="flex flex-col gap-1.5">
                 {filteredTrees.slice(0, 8).map(tree => {
-                  const color      = complianceColor(tree.uiStatus);
+                  const color      = complianceColor(treeComplianceStatus(tree));
                   const isSelected = selectedTree?.id === tree.id;
                   return (
                     <button
@@ -1190,9 +1243,9 @@ export function MapPage() {
                         {tree.botanicalName}
                       </span>
                       <span className="flex-shrink-0 px-1.5 py-0.5 rounded-full"
-                        style={{ background: complianceBg(tree.uiStatus),
+                        style={{ background: complianceBg(treeComplianceStatus(tree)),
                           color, fontSize: "0.6rem", fontWeight: 700 }}>
-                        {complianceLabel(tree.uiStatus)}
+                        {complianceLabel(treeComplianceStatus(tree))}
                       </span>
                     </button>
                   );
