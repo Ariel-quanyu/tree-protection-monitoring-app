@@ -4,6 +4,7 @@ import { type ProjectData } from "../../data/projectsData";
 import { AddTreeSheet } from "../dashboard/AddTreeSheet";
 import { useProject } from "../../context/ProjectContext";
 import { supabase } from "../../../lib/supabase";
+import { getDisplayMeasures } from "./treeProtectionMeasures";
 
 import React, { useState, useMemo, useEffect } from "react";
 import { useNavigate, useSearchParams } from "react-router";
@@ -57,30 +58,6 @@ const RETENTION_CFG: Record<string, { color: string }> = {
   "Retain - MDRI & Arborist Supervision": { color: "#7C3AED" },
   "Remove":                               { color: "#DC2626" },
 };
-
-const TPM_EMPTY_VALUES = new Set(["", "none", "n/a", "na", "null"]);
-function cleanMeasureLabel(value: string): string | null {
-  const label = value.trim();
-  if (!label) return null;
-  if (TPM_EMPTY_VALUES.has(label.toLowerCase())) return null;
-  return label;
-}
-
-function parseTreeProtectionMeasures(raw: string): string[] {
-  const parts = raw
-    .split(/[,;\/\n]+/g)
-    .map((item) => cleanMeasureLabel(item))
-    .filter((item): item is string => item !== null);
-  return Array.from(new Set(parts));
-}
-
-function getDisplayMeasures(tree: SupabaseTree): string[] {
-  const required = tree.requiredMeasures
-    .map((item) => cleanMeasureLabel(item))
-    .filter((item): item is string => item !== null);
-  if (required.length > 0) return Array.from(new Set(required));
-  return parseTreeProtectionMeasures(tree.treeProtectionMeasures);
-}
 
 // ─── Project Dropdown ─────────────────────────────────────────────────────────
 
@@ -257,7 +234,7 @@ function RetentionPill({ status }: { status: string }) {
 
 function TreeCard({ tree }: { tree: SupabaseTree }) {
   const navigate = useNavigate();
-  const displayMeasures = getDisplayMeasures(tree);
+  const displayMeasures = getDisplayMeasures(tree.requiredMeasures, tree.treeProtectionMeasures);
   return (
     <button
       onClick={() => navigate(`/trees/${tree.id}`)}
