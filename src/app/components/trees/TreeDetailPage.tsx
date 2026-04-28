@@ -9,6 +9,7 @@ import { supabase } from "../../../lib/supabase";
 import { useSelectedProject } from "../../context/ProjectContext";
 import { EncroachmentBadge } from "../StatusBadge";
 import { type SupabaseTree, mapSupabaseTree } from "../../data/treeMapper";
+import { getDisplayMeasures } from "./treeProtectionMeasures";
 import {
   VISIT_TYPE_SHORT, VISIT_TYPE_COLORS, ALL_VISIT_TYPES, type VisitType,
 } from "../../data/visitsData";
@@ -383,7 +384,7 @@ export function TreeDetailPage() {
 
     supabase
       .from("trees")
-      .select("*, required_measures")
+      .select("*, required_measures, tree_protection_measures")
       .eq("project_id", uuid).eq("tree_id", routeTreeId)
       .maybeSingle()
       .then(({ data, error }) => {
@@ -517,6 +518,7 @@ export function TreeDetailPage() {
   const encBg     = ENC_BG[tree.encroachmentClass];
   const hasEnc    = tree.encroachmentClass !== "None" ||
     (tree.nrzEncroachment !== "None" && tree.nrzEncroachment !== "");
+  const displayMeasures = getDisplayMeasures(tree.requiredMeasures, tree.treeProtectionMeasures);
 
   // TPM status display
   const tpmDisplay = {
@@ -736,7 +738,7 @@ export function TreeDetailPage() {
               </div>
             </div>
 
-            <RequiredMeasuresCard measures={tree.requiredMeasures} />
+            <RequiredMeasuresCard measures={displayMeasures} />
 
             {/* TPM compliance */}
             <TPMStatusCard
@@ -992,9 +994,9 @@ export function TreeDetailPage() {
                           }}>
                             Required Tree Protection Measures
                           </p>
-                          {tree.requiredMeasures.length > 0 ? (
+                          {displayMeasures.length > 0 ? (
                             <div className="flex flex-wrap gap-1.5">
-                              {tree.requiredMeasures.map((measure) => (
+                              {displayMeasures.map((measure) => (
                                 <span
                                   key={`${record.id}-${measure}`}
                                   className="rounded-full px-2 py-0.5"
