@@ -25,8 +25,8 @@ function compliancePct(inspected: number, breaches: number) {
 
 const TPM_COLORS = {
   "compliant":     { bg: "#DCFCE7", text: "#15803D", label: "Compliant" },
-  "not-compliant": { bg: "#FEE2E2", text: "#DC2626", label: "Not Compliant" },
-  "pending":       { bg: "#FEF3C7", text: "#B45309", label: "Pending" },
+  "not_compliant": { bg: "#FEE2E2", text: "#DC2626", label: "Not Compliant" },
+  "breach":        { bg: "#FEE2E2", text: "#991B1B", label: "Breach" },
 } as const;
 
 const HEALTH_COLORS: Record<string, { color: string }> = {
@@ -50,7 +50,7 @@ export function VisitDetailPage() {
 
   interface TreeVisitRecordRow {
     tree_id: string | null;
-    tpm_status: "compliant" | "not-compliant" | null;
+    tpm_status: "compliant" | "not_compliant" | "breach" | null;
     health: string | null;
     damage: string | null;
     notes: string | null;
@@ -151,9 +151,9 @@ export function VisitDetailPage() {
             botanicalName: treeMeta?.botanical_name ?? "",
             location: treeMeta?.location ?? "",
             noChange: false,
-            tpmCompliance: record.tpm_status === "compliant" || record.tpm_status === "not-compliant"
-              ? record.tpm_status
-              : "pending",
+            tpmCompliance: record.tpm_status === "compliant" || record.tpm_status === "not_compliant" || record.tpm_status === "breach" || record.tpm_status === "not-compliant"
+              ? (record.tpm_status === "not-compliant" ? "not_compliant" : record.tpm_status)
+              : "compliant",
             health: record.health === "Good" || record.health === "Fair" || record.health === "Poor" || record.health === "Dead"
               ? record.health
               : "",
@@ -168,7 +168,7 @@ export function VisitDetailPage() {
         const inspectedTrees = normalizedTreeInspections.length;
         const totalTrees = projectTreeCount ?? 0;
         const noChangeTrees = Math.max(totalTrees - inspectedTrees, 0);
-        const breachCount = normalizedTreeInspections.filter((record) => record.tpmCompliance === "not-compliant").length;
+        const breachCount = normalizedTreeInspections.filter((record) => record.tpmCompliance === "not_compliant" || record.tpmCompliance === "breach").length;
 
         const mappedVisit: Visit = {
           id: visitRow.id,
@@ -495,7 +495,7 @@ export function VisitDetailPage() {
               {visit.treeInspections.map(insp => {
                 const tpm   = TPM_COLORS[insp.tpmCompliance];
                 const hlth  = HEALTH_COLORS[insp.health];
-                const isBreach = insp.tpmCompliance === "not-compliant";
+                const isBreach = insp.tpmCompliance === "not_compliant" || insp.tpmCompliance === "breach";
                 const photoUrls = Array.isArray(insp.photoUrls) ? insp.photoUrls.filter(Boolean) : [];
                 const hasPhotos = photoUrls.length > 0;
                 return (

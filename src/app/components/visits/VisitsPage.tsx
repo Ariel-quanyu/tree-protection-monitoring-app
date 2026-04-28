@@ -253,7 +253,7 @@ export function VisitsPage() {
           if (!record.visit_id) return;
           const current = recordSummaryByVisitId.get(record.visit_id) ?? { inspectedTrees: 0, breachCount: 0 };
           current.inspectedTrees += 1;
-          if (record.tpm_status === "not-compliant") current.breachCount += 1;
+          if (record.tpm_status === "not_compliant" || record.tpm_status === "not-compliant" || record.tpm_status === "breach") current.breachCount += 1;
           recordSummaryByVisitId.set(record.visit_id, current);
         });
 

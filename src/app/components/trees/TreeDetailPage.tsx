@@ -27,7 +27,7 @@ interface TreeVisitRecord {
   visit_id: string;
   project_id: string;
   tree_id: string;
-  tpm_status: "compliant" | "not-compliant" | null;
+  tpm_status: "compliant" | "not_compliant" | "breach" | null;
   health: string | null;
   damage: string | null;
   notes: string | null;
@@ -60,7 +60,7 @@ function parseObservations(raw: unknown): EmbeddedObs[] {
 
 // ── Compliance types ──────────────────────────────────────────────────────────
 
-type TPMStatus  = "compliant" | "not-compliant";
+type TPMStatus  = "compliant" | "not_compliant" | "breach";
 type TreeHealth = "Good" | "Fair" | "Poor" | "Dead" | "";
 type TreeDamage = "Yes" | "No" | "";
 
@@ -126,7 +126,8 @@ function TPMStatusCard({
       <div className="flex gap-2">
         {([
           { v: "compliant"     as TPMStatus, label: "Compliant",     icon: <CheckCircle2 size={18} />, activeBg: "#DCFCE7", activeText: "#15803D", activeBorder: "#86EFAC" },
-          { v: "not-compliant" as TPMStatus, label: "Not Compliant", icon: <XCircle size={18} />,      activeBg: "#FEE2E2", activeText: "#DC2626", activeBorder: "#FCA5A5" },
+          { v: "not_compliant" as TPMStatus, label: "Not Compliant", icon: <XCircle size={18} />, activeBg: "#FEE2E2", activeText: "#DC2626", activeBorder: "#FCA5A5" },
+          { v: "breach" as TPMStatus, label: "Breach", icon: <AlertTriangle size={18} />, activeBg: "#FEE2E2", activeText: "#991B1B", activeBorder: "#FCA5A5" },
         ]).map(({ v, label, icon, activeBg, activeText, activeBorder }) => {
           const active = value === v;
           return (
@@ -520,7 +521,8 @@ export function TreeDetailPage() {
   // TPM status display
   const tpmDisplay = {
     compliant:       { bg: "#DCFCE7", text: "#15803D", label: "Compliant",     icon: <CheckCircle2 size={14} /> },
-    "not-compliant": { bg: "#FEE2E2", text: "#DC2626", label: "Not Compliant", icon: <XCircle size={14} /> },
+    "not_compliant": { bg: "#FEE2E2", text: "#DC2626", label: "Not Compliant", icon: <XCircle size={14} /> },
+    breach:          { bg: "#FEE2E2", text: "#991B1B", label: "Breach", icon: <AlertTriangle size={14} /> },
   }[tpmStatus];
 
   const handleQuickInspectionSave = async () => {
@@ -925,7 +927,7 @@ export function TreeDetailPage() {
                   ? visitTypeRaw
                   : "Routine Visit") as VisitType;
                 const cfg = VISIT_TYPE_COLORS[visitType];
-                const isBreach = record.tpm_status === "not-compliant";
+                const isBreach = record.tpm_status === "not_compliant" || record.tpm_status === "not-compliant" || record.tpm_status === "breach";
                 const eventDate = record.visits?.inspection_date ?? record.created_at;
                 const photoUrls = Array.isArray(record.photo_urls) ? record.photo_urls.filter(Boolean) : [];
                 const hasPhotos = photoUrls.length > 0;
@@ -961,7 +963,7 @@ export function TreeDetailPage() {
                                 color: isBreach ? "#DC2626" : "#15803D",
                                 fontSize: "0.65rem", fontWeight: 700,
                               }}>
-                              {isBreach ? "Not Compliant" : "Compliant"}
+                              {record.tpm_status === "breach" ? "Breach" : isBreach ? "Not Compliant" : "Compliant"}
                             </span>
                           )}
                           {record.health && (
