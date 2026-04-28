@@ -18,7 +18,7 @@ export interface TreeInspection {
   botanicalName: string;
   location: string;
   noChange: boolean;         // true = inherited from previous inspection — no new observations recorded this visit
-  tpmCompliance: "compliant" | "not-compliant" | "pending";
+  tpmCompliance: "compliant" | "not_compliant" | "breach";
   health: "Good" | "Fair" | "Poor" | "Dead" | "";
   damage: "Yes" | "No" | "";
   notes: string;
@@ -87,7 +87,7 @@ export const MOCK_VISITS: Visit[] = [
       { treeId: "T001", botanicalName: "Eucalyptus obliqua", location: "Onsite", noChange: true,  tpmCompliance: "compliant",     health: "Good", damage: "No",  notes: "" },
       { treeId: "T002", botanicalName: "Acacia melanoxylon", location: "Onsite", noChange: true,  tpmCompliance: "compliant",     health: "Good", damage: "No",  notes: "" },
       { treeId: "T003", botanicalName: "Eucalyptus viminalis", location: "Neighbouring property", noChange: true,  tpmCompliance: "compliant", health: "Fair", damage: "No", notes: "" },
-      { treeId: "T004", botanicalName: "Lophostemon confertus", location: "Onsite", noChange: false, tpmCompliance: "not-compliant", health: "Good", damage: "No",  notes: "Fencing displaced approx 0.5m on eastern side. Reinstated during visit." },
+      { treeId: "T004", botanicalName: "Lophostemon confertus", location: "Onsite", noChange: false, tpmCompliance: "breach", health: "Good", damage: "No",  notes: "Fencing displaced approx 0.5m on eastern side. Reinstated during visit." },
       { treeId: "T005", botanicalName: "Eucalyptus obliqua", location: "Nature strip", noChange: true, tpmCompliance: "compliant", health: "Good", damage: "No", notes: "" },
       { treeId: "T006", botanicalName: "Acacia dealbata", location: "Onsite", noChange: true, tpmCompliance: "compliant", health: "Fair", damage: "No", notes: "" },
     ],

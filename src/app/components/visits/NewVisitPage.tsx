@@ -14,7 +14,7 @@ import { mapSupabaseTree, type SupabaseTree } from "../../data/treeMapper";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type TPMStatus = "compliant" | "not-compliant" | "pending";
+type TPMStatus = "compliant" | "not_compliant" | "breach";
 type TreeHealth = "Good" | "Fair" | "Poor" | "Dead" | "";
 type TreeDamage = "Yes" | "No" | "";
 
@@ -33,7 +33,7 @@ type Step = 1 | 2 | 3;
 function isTreeRecordUpdated(record: TreeRecord): boolean {
   if (!record.noChange) return true;
   return (
-    record.tpmStatus !== "pending" ||
+    record.tpmStatus !== "compliant" ||
     record.health !== "" ||
     record.damage !== "" ||
     record.notes.trim() !== ""
@@ -178,29 +178,33 @@ function VisitTypeSelector({
 // ── TPM Compliance toggle ─────────────────────────────────────────────────────
 
 function TpmToggle({ value, onChange }: { value: TPMStatus; onChange: (v: TPMStatus) => void }) {
-  const opts: { v: TPMStatus; label: string; activeColor: string; activeBg: string }[] = [
+  const opts: { v: TPMStatus; label: string; activeColor: string; activeBg: string; alsoActive?: (selected: TPMStatus) => boolean }[] = [
     { v: "compliant",     label: "Compliant",     activeColor: "#15803D", activeBg: "#DCFCE7" },
-    { v: "not-compliant", label: "Not Compliant",  activeColor: "#DC2626", activeBg: "#FEE2E2" },
-    { v: "pending",       label: "Pending",        activeColor: "#B45309", activeBg: "#FEF3C7" },
+    { v: "not_compliant", label: "Not Compliant", activeColor: "#DC2626", activeBg: "#FEE2E2", alsoActive: (selected) => selected === "breach" },
+    { v: "breach",        label: "Breach",        activeColor: "#991B1B", activeBg: "#FEE2E2" },
   ];
   return (
     <div className="flex gap-2">
-      {opts.map(({ v, label, activeColor, activeBg }) => (
-        <button
-          key={v}
-          onClick={() => onChange(v)}
-          className="flex-1 rounded-xl py-2.5 transition-all active:scale-95"
-          style={{
-            background: value === v ? activeBg : "#F9FAFB",
-            border: `1.5px solid ${value === v ? activeColor : "#E5E7EB"}`,
-            color: value === v ? activeColor : "#9CA3AF",
-            fontSize: "0.65rem",
-            fontWeight: value === v ? 700 : 500,
-          }}
-        >
-          {label}
-        </button>
-      ))}
+      {opts.map(({ v, label, activeColor, activeBg, alsoActive }) => {
+        const selected = value === v;
+        const impliedSelected = !selected && (alsoActive?.(value) ?? false);
+        return (
+          <button
+            key={v}
+            onClick={() => onChange(v)}
+            className="flex-1 rounded-xl py-2.5 transition-all active:scale-95"
+            style={{
+              background: selected || impliedSelected ? activeBg : "#F9FAFB",
+              border: `1.5px solid ${selected || impliedSelected ? activeColor : "#E5E7EB"}`,
+              color: selected || impliedSelected ? activeColor : "#9CA3AF",
+              fontSize: "0.65rem",
+              fontWeight: selected ? 700 : impliedSelected ? 600 : 500,
+            }}
+          >
+            {label}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -273,9 +277,9 @@ function TreeRecordRow({
   const { tree, noChange, tpmStatus, health, damage, notes, expanded } = record;
 
   const statusColor = tpmStatus === "compliant" ? "#15803D"
-    : tpmStatus === "not-compliant" ? "#DC2626" : "#B45309";
+    : tpmStatus === "not_compliant" ? "#DC2626" : "#991B1B";
   const statusBg = tpmStatus === "compliant" ? "#DCFCE7"
-    : tpmStatus === "not-compliant" ? "#FEE2E2" : "#FEF3C7";
+    : "#FEE2E2";
 
   return (
     <div
@@ -283,8 +287,7 @@ function TreeRecordRow({
       style={{
         background: "white",
         border: noChange ? "1.5px solid #E5E7EB"
-          : tpmStatus === "not-compliant" ? "1.5px solid #FECACA"
-          : "1.5px solid #BBF7D0",
+          : tpmStatus === "compliant" ? "1.5px solid #BBF7D0" : "1.5px solid #FECACA",
         boxShadow: "0 1px 4px rgba(0,0,0,0.05)",
       }}
     >
@@ -330,7 +333,7 @@ function TreeRecordRow({
           ) : !expanded ? (
             <span className="rounded-full px-2 py-0.5"
               style={{ background: statusBg, color: statusColor, fontSize: "0.62rem", fontWeight: 700 }}>
-              {tpmStatus === "compliant" ? "✓" : tpmStatus === "not-compliant" ? "✗" : "…"}
+              {tpmStatus === "compliant" ? "✓" : tpmStatus === "not_compliant" ? "✗" : "!"}
             </span>
           ) : null}
           <ChevronRight
@@ -420,7 +423,7 @@ function ReviewStep({
   const cfg    = VISIT_TYPE_COLORS[visitType];
   const inspected   = records.filter(r => !r.noChange).length;
   const noChange    = records.filter(r => r.noChange).length;
-  const breaches    = records.filter(r => !r.noChange && r.tpmStatus === "not-compliant").length;
+  const breaches    = records.filter(r => !r.noChange && (r.tpmStatus === "not_compliant" || r.tpmStatus === "breach")).length;
   const compPct     = inspected > 0 ? Math.round(((inspected - breaches) / inspected) * 100) : 100;
 
   return (
@@ -538,7 +541,7 @@ export function NewVisitPage() {
         setRecords(mapped.map(t => ({
           tree: t,
           noChange: false,
-          tpmStatus: "pending",
+          tpmStatus: "compliant",
           health: "",
           damage: "",
           notes: "",
@@ -557,7 +560,7 @@ export function NewVisitPage() {
   };
 
   const inspectedCount  = records.filter(r => !r.noChange).length;
-  const breachCount     = records.filter(r => !r.noChange && r.tpmStatus === "not-compliant").length;
+  const breachCount     = records.filter(r => !r.noChange && (r.tpmStatus === "not_compliant" || r.tpmStatus === "breach")).length;
   const canNext1 = visitType !== "" && inspector.trim() !== "" && date !== "";
 
   const handleComplete = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -626,7 +629,7 @@ export function NewVisitPage() {
           visit_id: visitId,
           project_id: projectUuid,
           tree_id: record.tree.id,
-          tpm_status: record.tpmStatus === "pending" ? null : record.tpmStatus,
+          tpm_status: record.tpmStatus,
           health: record.health || null,
           damage: record.damage || null,
           notes: record.notes.trim() || null,
