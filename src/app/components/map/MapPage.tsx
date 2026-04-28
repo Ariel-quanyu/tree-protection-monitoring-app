@@ -17,22 +17,28 @@ import { type SupabaseTree, mapSupabaseTree } from "../../data/treeMapper";
 type MapMode       = "sites" | "trees";
 type StatusFilter  = "all" | "compliant" | "not-compliant" | "breach";
 type SymbologyMode = "none" | "nrz" | "srz" | "dsh";
-type TPMStatus = "compliant" | "not_compliant" | "breach";
+type TPMStatus = "compliant" | "not_compliant" | "breach" | "removed";
 
 // ── Colour helpers: binary compliance ────────────────────────────────────────
 
 function complianceColor(status: TPMStatus): string {
   if (status === "compliant") return "#16A34A";
+  if (status === "removed") return "#9CA3AF";
+  if (status === "not_compliant") return "#EA580C";
   if (status === "breach") return "#991B1B";
-  return "#DC2626";
+  return "#EA580C";
 }
 function complianceBg(status: TPMStatus): string {
-  return status === "compliant" ? "#DCFCE7" : "#FEE2E2";
+  if (status === "compliant") return "#DCFCE7";
+  if (status === "removed") return "#F3F4F6";
+  if (status === "breach") return "#FEE2E2";
+  return "#FFEDD5";
 }
 function complianceLabel(status: TPMStatus): string {
   if (status === "compliant") return "Compliant";
+  if (status === "removed") return "Removed";
   if (status === "breach") return "Breach";
-  return "Not Compliant";
+  return "At Risk";
 }
 
 // ── Project status colours ────────────────────────────────────────────────────
@@ -64,9 +70,34 @@ const STATIC_CENTRES: Record<string, [number, number]> = {};
 
 const LEGEND_ITEMS = [
   { label: "Compliant",     color: "#16A34A" },
-  { label: "Not Compliant", color: "#DC2626" },
+  { label: "Not Compliant", color: "#EA580C" },
   { label: "Breach",        color: "#991B1B" },
+  { label: "Removed",       color: "#9CA3AF" },
 ];
+
+function deriveBaselineFallbackStatus(tree: SupabaseTree): TPMStatus {
+  const containsAny = (value: string, terms: string[]) => {
+    const normalized = value.toLowerCase();
+    return terms.some((term) => normalized.includes(term));
+  };
+
+  if (containsAny(tree.retentionStatus, ["remove"]) || containsAny(tree.currentStatus, ["removed"])) {
+    return "removed";
+  }
+
+  const encroachmentSignals = [
+    tree.encroachmentClass,
+    tree.nrzEncroachment,
+    tree.srzEncroachment,
+  ];
+  if (encroachmentSignals.some((value) => containsAny(value, ["major"]))) {
+    return "breach";
+  }
+  if (encroachmentSignals.some((value) => containsAny(value, ["minor", "moderate"]))) {
+    return "not_compliant";
+  }
+  return "compliant";
+}
 
 // ── Project abbreviation helpers ─────────────────────────────────────────────
 
@@ -351,7 +382,7 @@ export function MapPage() {
 
   // ── Derived data ──────────────────────────────────────────────────────────
   const treeComplianceStatus = (tree: SupabaseTree): TPMStatus => {
-    return treeStatusById.get(tree.id) ?? "compliant";
+    return treeStatusById.get(tree.id) ?? deriveBaselineFallbackStatus(tree);
   };
 
   const { filteredTrees, focusTree } = useMemo(() => {
