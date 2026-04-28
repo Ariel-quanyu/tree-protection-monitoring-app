@@ -3,7 +3,7 @@ import { useParams, useNavigate } from "react-router";
 import {
   ChevronLeft, ClipboardList, TreePine, Shield,
   Navigation, WifiOff, Info, Ruler,
-  Camera, CheckCircle2, XCircle, ChevronRight,
+  Camera, CheckCircle2, XCircle, ChevronRight, AlertTriangle,
 } from "lucide-react";
 import { supabase } from "../../../lib/supabase";
 import { useSelectedProject } from "../../context/ProjectContext";
