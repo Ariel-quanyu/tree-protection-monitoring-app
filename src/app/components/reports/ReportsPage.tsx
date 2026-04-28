@@ -1,18 +1,12 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import { useNavigate } from "react-router";
 import {
-  BarChart3, FileDown, CheckCircle2, AlertCircle,
+  FileDown, AlertCircle,
   Trees, ClipboardCheck, ChevronRight, Archive,
-  TrendingUp, Shield, Calendar, FileText,
+  TrendingUp, Shield, FileText,
 } from "lucide-react";
-import { MOCK_VISITS, VISIT_TYPE_SHORT, VISIT_TYPE_COLORS } from "../../data/visitsData";
 import { useProject } from "../../context/ProjectContext";
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function formatDateShort(iso: string) {
-  return new Date(iso).toLocaleDateString("en-AU", { day: "numeric", month: "short" });
-}
+import { supabase } from "../../../lib/supabase";
 
 function pctColor(pct: number) {
   if (pct >= 90) return "#15803D";
@@ -25,8 +19,6 @@ function pctBg(pct: number) {
   if (pct >= 70) return "#FEF3C7";
   return "#FEE2E2";
 }
-
-// ── Compliance bar ────────────────────────────────────────────────────────────
 
 function ComplianceBar({ pct }: { pct: number }) {
   const color = pctColor(pct);
@@ -43,42 +35,175 @@ function ComplianceBar({ pct }: { pct: number }) {
   );
 }
 
-// ── Main page ─────────────────────────────────────────────────────────────────
+type NormalizedStatus = "compliant" | "not_compliant" | "breach" | null;
+
+type VisitRow = {
+  id: string;
+  project_id: string | null;
+  inspection_date: string | null;
+  visit_type: string | null;
+  inspector_name: string | null;
+  created_at: string | null;
+};
+
+type TreeVisitRecordRow = {
+  visit_id: string | null;
+  tree_id: string | null;
+  tpm_status: string | null;
+};
+
+function normalizeStatus(raw: string | null): NormalizedStatus {
+  if (!raw) return null;
+  const value = raw.trim().toLowerCase().replace(/\s+/g, "_").replace(/-/g, "_");
+  if (value === "compliant") return "compliant";
+  if (value === "breach") return "breach";
+  if (value === "not_compliant") return "not_compliant";
+  return null;
+}
 
 export function ReportsPage() {
   const navigate = useNavigate();
-  const { projects, selectedProjectId } = useProject();
-  const [selectedProject, setSelectedProject] = useState<string>(selectedProjectId || "all");
+  const { projects, selectedProjectId: globalSelectedProjectId, loadingProjects } = useProject();
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const initializedFromGlobalRef = useRef(false);
+  const [loadingData, setLoadingData] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [visits, setVisits] = useState<VisitRow[]>([]);
+  const [records, setRecords] = useState<TreeVisitRecordRow[]>([]);
 
-  const project = projects.find(p => p.id === selectedProject);
+  useEffect(() => {
+    if (loadingProjects || initializedFromGlobalRef.current) return;
 
-  const projectVisits = useMemo(() =>
-    MOCK_VISITS
-      .filter(v => selectedProject === "all" || v.projectId === selectedProject)
-      .filter(v => v.status === "completed")
-      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()),
-    [selectedProject]
-  );
+    if (globalSelectedProjectId) {
+      const matchingProject = projects.find(
+        (project) => project.id === globalSelectedProjectId || project.uuid === globalSelectedProjectId,
+      );
+      setSelectedProjectId(matchingProject?.uuid ?? null);
+    } else {
+      setSelectedProjectId(null);
+    }
 
-  const totalVisits    = projectVisits.length;
-  const totalBreaches  = projectVisits.reduce((s, v) => s + v.breachCount, 0);
-  const totalInspected = projectVisits.reduce((s, v) => s + v.inspectedTrees, 0);
-  const avgCompliance  = totalInspected > 0
-    ? Math.round(((totalInspected - totalBreaches) / totalInspected) * 100)
-    : 100;
+    initializedFromGlobalRef.current = true;
+  }, [projects, globalSelectedProjectId, loadingProjects]);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const loadReportData = async () => {
+      setLoadingData(true);
+      setErrorMessage(null);
+      try {
+        let visitsQuery = supabase
+          .from("visits")
+          .select("id, project_id, inspection_date, visit_type, inspector_name, created_at")
+          .order("inspection_date", { ascending: false })
+          .order("created_at", { ascending: false });
+
+        if (selectedProjectId) {
+          visitsQuery = visitsQuery.eq("project_id", selectedProjectId);
+        }
+
+        const { data: visitsData, error: visitsError } = await visitsQuery;
+        if (visitsError) throw visitsError;
+
+        const typedVisits = (visitsData ?? []) as VisitRow[];
+        const visitIds = typedVisits.map((visit) => visit.id);
+
+        let recordsByProjectQuery = supabase
+          .from("tree_visit_records")
+          .select("visit_id, tree_id, tpm_status");
+
+        if (selectedProjectId) {
+          recordsByProjectQuery = recordsByProjectQuery.eq("project_id", selectedProjectId);
+        }
+
+        const [{ data: allRecordsData, error: allRecordsError }, visitRecordsResult] = await Promise.all([
+          recordsByProjectQuery,
+          visitIds.length > 0
+            ? supabase
+              .from("tree_visit_records")
+              .select("visit_id, tree_id, tpm_status")
+              .in("visit_id", visitIds)
+            : Promise.resolve({ data: [], error: null }),
+        ]);
+
+        if (allRecordsError) throw allRecordsError;
+        if (visitRecordsResult.error) throw visitRecordsResult.error;
+
+        if (!mounted) return;
+        setVisits(typedVisits);
+        setRecords(((allRecordsData ?? visitRecordsResult.data ?? []) as TreeVisitRecordRow[]));
+      } catch (error) {
+        console.error("Failed to fetch reports data:", error);
+        if (!mounted) return;
+        setErrorMessage("Failed to load report data. Please try again.");
+        setVisits([]);
+        setRecords([]);
+      } finally {
+        if (mounted) setLoadingData(false);
+      }
+    };
+
+    if (loadingProjects) return;
+    void loadReportData();
+
+    return () => {
+      mounted = false;
+    };
+  }, [selectedProjectId, loadingProjects]);
+
+  const recordsByVisitId = useMemo(() => {
+    const map = new Map<string, TreeVisitRecordRow[]>();
+    records.forEach((record) => {
+      if (!record.visit_id) return;
+      const current = map.get(record.visit_id) ?? [];
+      current.push(record);
+      map.set(record.visit_id, current);
+    });
+    return map;
+  }, [records]);
+
+  const totalVisits = visits.length;
+  const totalBreaches = records.reduce((sum, record) => (
+    normalizeStatus(record.tpm_status) === "breach" ? sum + 1 : sum
+  ), 0);
+
+  const treesInspected = useMemo(() => {
+    const distinctTreeIds = new Set<string>();
+    records.forEach((record) => {
+      if (record.tree_id) distinctTreeIds.add(record.tree_id);
+    });
+    return distinctTreeIds.size;
+  }, [records]);
+
+  const complianceTotals = useMemo(() => {
+    let compliant = 0;
+    let known = 0;
+    records.forEach((record) => {
+      const status = normalizeStatus(record.tpm_status);
+      if (!status) return;
+      known += 1;
+      if (status === "compliant") compliant += 1;
+    });
+    return { compliant, known };
+  }, [records]);
+
+  const avgCompliance = complianceTotals.known > 0
+    ? Math.round((complianceTotals.compliant / complianceTotals.known) * 100)
+    : 0;
 
   const visitTypeBreakdown = useMemo(() => {
     const counts: Record<string, number> = {};
-    projectVisits.forEach(v => {
-      const k = VISIT_TYPE_SHORT[v.type];
-      counts[k] = (counts[k] ?? 0) + 1;
+    visits.forEach((visit) => {
+      const visitType = visit.visit_type?.trim();
+      if (!visitType) return;
+      counts[visitType] = (counts[visitType] ?? 0) + 1;
     });
     return Object.entries(counts).sort((a, b) => b[1] - a[1]);
-  }, [projectVisits]);
+  }, [visits]);
 
   return (
     <div className="pb-32">
-      {/* Header */}
       <div
         className="px-4 pt-12 pb-5"
         style={{ background: "linear-gradient(160deg, #1B4332 0%, #2D6A4F 100%)" }}
@@ -91,28 +216,27 @@ export function ReportsPage() {
           Reports
         </h1>
 
-        {/* Project filter */}
         <div className="flex gap-2 mt-3 overflow-x-auto" style={{ scrollbarWidth: "none" }}>
           <button
-            onClick={() => setSelectedProject("all")}
+            onClick={() => setSelectedProjectId(null)}
             className="flex-shrink-0 rounded-full px-3 py-1.5 transition-all"
             style={{
-              background: selectedProject === "all" ? "white" : "rgba(255,255,255,0.15)",
-              color:      selectedProject === "all" ? "#1B4332" : "rgba(255,255,255,0.85)",
-              fontSize: "0.7rem", fontWeight: selectedProject === "all" ? 700 : 500,
+              background: selectedProjectId === null ? "white" : "rgba(255,255,255,0.15)",
+              color:      selectedProjectId === null ? "#1B4332" : "rgba(255,255,255,0.85)",
+              fontSize: "0.7rem", fontWeight: selectedProjectId === null ? 700 : 500,
             }}
           >
             All Projects
           </button>
-          {projects.map(p => (
+          {projects.map((p) => (
             <button
-              key={p.id}
-              onClick={() => setSelectedProject(p.id)}
+              key={p.uuid}
+              onClick={() => setSelectedProjectId(p.uuid)}
               className="flex-shrink-0 rounded-full px-3 py-1.5 transition-all"
               style={{
-                background: selectedProject === p.id ? "white" : "rgba(255,255,255,0.15)",
-                color:      selectedProject === p.id ? "#1B4332" : "rgba(255,255,255,0.85)",
-                fontSize: "0.7rem", fontWeight: selectedProject === p.id ? 700 : 500,
+                background: selectedProjectId === p.uuid ? "white" : "rgba(255,255,255,0.15)",
+                color:      selectedProjectId === p.uuid ? "#1B4332" : "rgba(255,255,255,0.85)",
+                fontSize: "0.7rem", fontWeight: selectedProjectId === p.uuid ? 700 : 500,
                 whiteSpace: "nowrap",
               }}
             >
@@ -123,13 +247,12 @@ export function ReportsPage() {
       </div>
 
       <div className="px-4 mt-4 flex flex-col gap-4">
-        {/* Portfolio stats */}
         <div className="grid grid-cols-2 gap-2.5">
           {[
             { icon: ClipboardCheck, label: "Total Visits",      value: totalVisits,   color: "#1B4332",  bg: "#F0FDF4" },
             { icon: Shield,         label: "Avg Compliance",    value: `${avgCompliance}%`, color: pctColor(avgCompliance), bg: pctBg(avgCompliance) },
             { icon: AlertCircle,    label: "Total Breaches",    value: totalBreaches, color: totalBreaches > 0 ? "#DC2626" : "#15803D", bg: totalBreaches > 0 ? "#FEF2F2" : "#F0FDF4" },
-            { icon: Trees,          label: "Trees Inspected",   value: totalInspected, color: "#1D4ED8", bg: "#EFF6FF" },
+            { icon: Trees,          label: "Trees Inspected",   value: treesInspected, color: "#1D4ED8", bg: "#EFF6FF" },
           ].map(({ icon: Icon, label, value, color, bg }) => (
             <div key={label} className="rounded-2xl p-4"
               style={{ background: bg, border: `1px solid ${color}22` }}>
@@ -142,7 +265,6 @@ export function ReportsPage() {
           ))}
         </div>
 
-        {/* Visit type breakdown */}
         {visitTypeBreakdown.length > 0 && (
           <div className="rounded-2xl p-4"
             style={{ background: "white", boxShadow: "0 1px 6px rgba(0,0,0,0.06)" }}>
@@ -157,7 +279,7 @@ export function ReportsPage() {
                   <div className="flex items-center gap-2">
                     <div className="rounded-full overflow-hidden" style={{ width: 60, height: 6, background: "#F3F4F6" }}>
                       <div className="h-full rounded-full"
-                        style={{ width: `${(count / totalVisits) * 100}%`, background: "#1B4332" }} />
+                        style={{ width: `${totalVisits > 0 ? (count / totalVisits) * 100 : 0}%`, background: "#1B4332" }} />
                     </div>
                     <span style={{ color: "#111827", fontSize: "0.75rem", fontWeight: 700, minWidth: 16 }}>
                       {count}
@@ -169,7 +291,6 @@ export function ReportsPage() {
           </div>
         )}
 
-        {/* Compliance history timeline */}
         <div className="rounded-2xl overflow-hidden"
           style={{ background: "white", boxShadow: "0 1px 6px rgba(0,0,0,0.06)" }}>
           <div className="px-4 pt-4 pb-3 flex items-center justify-between"
@@ -180,53 +301,73 @@ export function ReportsPage() {
             <TrendingUp size={14} color="#9CA3AF" />
           </div>
 
-          {projectVisits.length === 0 ? (
+          {loadingData ? (
+            <div className="px-4 py-8 text-center">
+              <p style={{ color: "#9CA3AF", fontSize: "0.82rem" }}>Loading reports…</p>
+            </div>
+          ) : errorMessage ? (
+            <div className="px-4 py-8 text-center">
+              <AlertCircle size={28} color="#FCA5A5" className="mx-auto mb-2" />
+              <p style={{ color: "#DC2626", fontSize: "0.82rem" }}>{errorMessage}</p>
+            </div>
+          ) : visits.length === 0 ? (
             <div className="px-4 py-8 text-center">
               <ClipboardCheck size={28} color="#D1D5DB" className="mx-auto mb-2" />
-              <p style={{ color: "#9CA3AF", fontSize: "0.82rem" }}>No completed visits yet</p>
+              <p style={{ color: "#9CA3AF", fontSize: "0.82rem" }}>No visits recorded yet.</p>
             </div>
           ) : (
             <div>
-              {projectVisits.map((v, i) => {
-                const pct    = v.inspectedTrees > 0
-                  ? Math.round(((v.inspectedTrees - v.breachCount) / v.inspectedTrees) * 100)
-                  : 100;
-                const cfg    = VISIT_TYPE_COLORS[v.type];
+              {visits.map((visit, i) => {
+                const visitRecords = recordsByVisitId.get(visit.id) ?? [];
+                const inspectedTreeCount = visitRecords.length;
+                const breachCount = visitRecords.reduce((sum, record) => (
+                  normalizeStatus(record.tpm_status) === "breach" ? sum + 1 : sum
+                ), 0);
+                const knownCount = visitRecords.reduce((sum, record) => (
+                  normalizeStatus(record.tpm_status) ? sum + 1 : sum
+                ), 0);
+                const compliantCount = visitRecords.reduce((sum, record) => (
+                  normalizeStatus(record.tpm_status) === "compliant" ? sum + 1 : sum
+                ), 0);
+                const pct = knownCount > 0 ? Math.round((compliantCount / knownCount) * 100) : 0;
+                const displayDate = visit.inspection_date ?? visit.created_at ?? new Date().toISOString();
+                const visitType = visit.visit_type?.trim() || "Unknown type";
+                const inspector = visit.inspector_name?.trim() || "Unknown inspector";
+
                 return (
                   <button
-                    key={v.id}
-                    onClick={() => navigate(`/visits/${v.id}`)}
+                    key={visit.id}
+                    onClick={() => navigate(`/visits/${visit.id}`)}
                     className="w-full px-4 py-3.5 text-left active:bg-gray-50 transition-colors"
-                    style={{ borderBottom: i < projectVisits.length - 1 ? "1px solid #F9FAFB" : "none" }}
+                    style={{ borderBottom: i < visits.length - 1 ? "1px solid #F9FAFB" : "none" }}
                   >
                     <div className="flex items-center gap-3">
-                      {/* Date block */}
                       <div className="rounded-xl flex flex-col items-center justify-center flex-shrink-0"
                         style={{ background: "#F0FDF4", width: 38, height: 38 }}>
                         <span style={{ color: "#1B4332", fontSize: "0.85rem", fontWeight: 800, lineHeight: 1 }}>
-                          {new Date(v.date).getDate()}
+                          {new Date(displayDate).getDate()}
                         </span>
                         <span style={{ color: "#15803D", fontSize: "0.48rem", fontWeight: 600, textTransform: "uppercase" }}>
-                          {new Date(v.date).toLocaleDateString("en-AU", { month: "short" })}
+                          {new Date(displayDate).toLocaleDateString("en-AU", { month: "short" })}
                         </span>
                       </div>
 
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-1.5 mb-0.5">
                           <span className="rounded-full px-2 py-0.5"
-                            style={{ background: cfg.bg, border: `1px solid ${cfg.border}` }}>
-                            <span style={{ color: cfg.text, fontSize: "0.58rem", fontWeight: 700 }}>
-                              {VISIT_TYPE_SHORT[v.type]}
+                            style={{ background: "#ECFDF3", border: "1px solid #BBF7D0" }}>
+                            <span style={{ color: "#15803D", fontSize: "0.58rem", fontWeight: 700 }}>
+                              {visitType}
                             </span>
                           </span>
-                          {v.breachCount > 0 && (
+                          {breachCount > 0 && (
                             <span style={{ color: "#DC2626", fontSize: "0.62rem", fontWeight: 700 }}>
-                              {v.breachCount} breach{v.breachCount !== 1 ? "es" : ""}
+                              {breachCount} breach{breachCount !== 1 ? "es" : ""}
                             </span>
                           )}
                         </div>
                         <p style={{ color: "#6B7280", fontSize: "0.7rem" }}>
-                          {v.inspectedTrees}/{v.totalTrees} trees · {v.inspector}
+                          {inspectedTreeCount} trees · {inspector}
                         </p>
                         <ComplianceBar pct={pct} />
                       </div>
@@ -240,7 +381,15 @@ export function ReportsPage() {
           )}
         </div>
 
-        {/* Export options */}
+        {!loadingData && !errorMessage && records.length === 0 && (
+          <div className="rounded-2xl p-4"
+            style={{ background: "#FFFBEB", border: "1px solid #FDE68A" }}>
+            <p style={{ color: "#92400E", fontSize: "0.78rem", fontWeight: 600 }}>
+              No inspection records yet. Start a visit to generate compliance reports.
+            </p>
+          </div>
+        )}
+
         <div className="rounded-2xl overflow-hidden"
           style={{ background: "white", boxShadow: "0 1px 6px rgba(0,0,0,0.06)" }}>
           <div className="px-4 pt-4 pb-3" style={{ borderBottom: "1px solid #F3F4F6" }}>
@@ -255,9 +404,10 @@ export function ReportsPage() {
           ].map(({ icon: Icon, label, sub, color, bg }) => (
             <button
               key={label}
-              className="w-full flex items-center gap-3.5 px-4 py-4 active:bg-gray-50 text-left transition-colors"
+              className="w-full flex items-center gap-3.5 px-4 py-4 text-left transition-colors opacity-70 cursor-not-allowed"
               style={{ borderBottom: "1px solid #F9FAFB" }}
-              onClick={() => {/* TODO: implement export */}}
+              disabled
+              title="Coming soon"
             >
               <div className="rounded-xl flex items-center justify-center flex-shrink-0"
                 style={{ width: 38, height: 38, background: bg }}>
@@ -265,14 +415,13 @@ export function ReportsPage() {
               </div>
               <div className="flex-1 min-w-0">
                 <p style={{ color: "#111827", fontSize: "0.82rem", fontWeight: 600 }}>{label}</p>
-                <p style={{ color: "#9CA3AF", fontSize: "0.68rem", marginTop: 1 }}>{sub}</p>
+                <p style={{ color: "#9CA3AF", fontSize: "0.68rem", marginTop: 1 }}>{sub} · Coming soon</p>
               </div>
               <ChevronRight size={14} color="#D1D5DB" style={{ flexShrink: 0 }} />
             </button>
           ))}
         </div>
 
-        {/* Archive project */}
         <div className="rounded-2xl overflow-hidden"
           style={{ background: "white", boxShadow: "0 1px 6px rgba(0,0,0,0.06)", border: "1px solid #FEE2E2" }}>
           <div className="px-4 pt-3 pb-2" style={{ borderBottom: "1px solid #FEE2E2" }}>
