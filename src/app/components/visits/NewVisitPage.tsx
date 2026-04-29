@@ -3,7 +3,7 @@ import { useNavigate } from "react-router";
 import {
   ChevronLeft, ChevronDown, CheckCircle2, Clock,
   Trees, User, FileText, ChevronRight, AlertTriangle,
-  Check, Minus, AlertCircle, ClipboardList,
+  Check, Minus, AlertCircle, ClipboardList, Camera,
 } from "lucide-react";
 import {
   ALL_VISIT_TYPES, VISIT_TYPE_SHORT, VISIT_TYPE_COLORS, type VisitType,
@@ -25,6 +25,7 @@ interface TreeRecord {
   health: TreeHealth;
   damage: TreeDamage;
   notes: string;
+  photos: File[];
   expanded: boolean;
 }
 
@@ -36,7 +37,8 @@ function isTreeRecordUpdated(record: TreeRecord): boolean {
     record.tpmStatus !== "compliant" ||
     record.health !== "" ||
     record.damage !== "" ||
-    record.notes.trim() !== ""
+    record.notes.trim() !== "" ||
+    record.photos.length > 0
   );
 }
 
@@ -376,6 +378,55 @@ function TreeRecordRow({
             <DamageToggle value={damage} onChange={v => onUpdate({ damage: v })} />
           </div>
 
+          {/* Photos */}
+          <div>
+            <p style={{ color: "#6B7280", fontSize: "0.65rem", fontWeight: 600,
+              textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6 }}>
+              Photos
+            </p>
+            <label
+              className="w-full rounded-xl px-4 py-5 flex flex-col items-center justify-center cursor-pointer"
+              style={{
+                background: "#F9FAFB",
+                border: "1.5px dashed #D1D5DB",
+              }}
+            >
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                multiple
+                className="hidden"
+                onChange={(event) => {
+                  const fileList = event.target.files ? Array.from(event.target.files) : [];
+                  if (fileList.length === 0) return;
+                  onUpdate({ photos: [...record.photos, ...fileList] });
+                  event.currentTarget.value = "";
+                }}
+              />
+              <Camera size={18} color="#6B7280" />
+              <p style={{ color: "#374151", fontSize: "0.8rem", fontWeight: 600, marginTop: 8 }}>
+                Tap to add photos
+              </p>
+              <p style={{ color: "#9CA3AF", fontSize: "0.68rem", marginTop: 3 }}>
+                Camera roll · JPG / PNG
+              </p>
+            </label>
+
+            {record.photos.length > 0 && (
+              <div className="flex flex-wrap gap-2 mt-2">
+                {record.photos.map((photo, idx) => (
+                  <img
+                    key={`${photo.name}-${idx}`}
+                    src={URL.createObjectURL(photo)}
+                    alt={`Tree ${tree.id} upload ${idx + 1}`}
+                    className="rounded-lg object-cover"
+                    style={{ width: 60, height: 60, border: "1px solid #E5E7EB" }}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+
           {/* Notes */}
           <div>
             <p style={{ color: "#6B7280", fontSize: "0.65rem", fontWeight: 600,
@@ -541,6 +592,7 @@ export function NewVisitPage() {
           health: "",
           damage: "",
           notes: "",
+          photos: [],
           expanded: false,
         })));
       })
@@ -619,17 +671,49 @@ export function NewVisitPage() {
       const visitId = insertedVisit.id;
       console.log("created visit id", visitId);
 
-      const updatedTreeRecordsPayload = records
-        .filter(isTreeRecordUpdated)
-        .map((record) => ({
-          visit_id: visitId,
-          project_id: projectUuid,
-          tree_id: record.tree.id,
-          tpm_status: record.tpmStatus,
-          health: record.health || null,
-          damage: record.damage || null,
-          notes: record.notes.trim() || null,
-        }));
+      const updatedTreeRecords = records
+        .filter(isTreeRecordUpdated);
+
+      const updatedTreeRecordsPayload = await Promise.all(
+        updatedTreeRecords.map(async (record) => {
+          const photoUrls: string[] = [];
+
+          if (record.photos.length > 0) {
+            for (let index = 0; index < record.photos.length; index += 1) {
+              const photo = record.photos[index];
+              const extension = (photo.name.split(".").pop() || "jpg").toLowerCase();
+              const filePath = `${projectUuid}/${visitId}/${record.tree.id}/${Date.now()}-${index}.${extension}`;
+
+              const { error: uploadError } = await supabase
+                .storage
+                .from("tree-photos")
+                .upload(filePath, photo, { upsert: false });
+
+              if (uploadError) throw uploadError;
+
+              const { data: publicUrlData } = supabase
+                .storage
+                .from("tree-photos")
+                .getPublicUrl(filePath);
+
+              if (publicUrlData?.publicUrl) {
+                photoUrls.push(publicUrlData.publicUrl);
+              }
+            }
+          }
+
+          return {
+            visit_id: visitId,
+            project_id: projectUuid,
+            tree_id: record.tree.id,
+            tpm_status: record.tpmStatus,
+            health: record.health || null,
+            damage: record.damage || null,
+            notes: record.notes.trim() || null,
+            photo_urls: photoUrls.length > 0 ? photoUrls : null,
+          };
+        })
+      );
 
       console.log("updated tree records payload", updatedTreeRecordsPayload);
 
