@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect } from "react";
 import { useNavigate, useLocation } from "react-router";
 import {
   ClipboardCheck, ChevronRight, AlertCircle, CheckCircle2,
-  Clock, User, Trees, X, Filter,
+  Clock, User, Trees, X,
 } from "lucide-react";
 import {
   VISIT_TYPE_SHORT,
@@ -10,7 +10,6 @@ import {
   type Visit,
   type VisitType,
 } from "../../data/visitsData";
-import { useProject } from "../../context/ProjectContext";
 import { supabase } from "../../../lib/supabase";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -205,12 +204,39 @@ type StatusFilter = "all" | "draft" | "completed";
 export function VisitsPage() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { projects } = useProject();
+  const [projects, setProjects] = useState<ProjectRow[]>([]);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [projectFilter, setProjectFilter] = useState<string>("all");
   const [visits, setVisits] = useState<VisitListItem[]>([]);
   const [loadingVisits, setLoadingVisits] = useState(false);
   const refreshVisitsAt = (location.state as { refreshVisitsAt?: number } | null)?.refreshVisitsAt;
+
+
+  useEffect(() => {
+    let mounted = true;
+
+    const loadProjects = async () => {
+      try {
+        const { data, error } = await supabase
+          .from("projects")
+          .select("id, name, slug")
+          .order("name", { ascending: true });
+        if (error) throw error;
+        if (!mounted) return;
+        setProjects((data ?? []) as ProjectRow[]);
+      } catch (error) {
+        console.error("Failed to fetch projects for visit filters:", error);
+        if (!mounted) return;
+        setProjects([]);
+      }
+    };
+
+    void loadProjects();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -335,22 +361,15 @@ export function VisitsPage() {
     };
   }, [refreshVisitsAt, location.key]);
 
-  const filtered = useMemo(() => {
-    const selectedProject = projects.find((project) => project.id === projectFilter);
-    const filterSlug = selectedProject?.id ?? projectFilter;
-    const filterUuid = selectedProject?.uuid ?? projectFilter;
+  const projectFilteredVisits = useMemo(() => {
+    if (projectFilter === "all") return visits;
+    return visits.filter((visit) => visit.projectUuid === projectFilter);
+  }, [visits, projectFilter]);
 
-    return visits
+  const filtered = useMemo(() => {
+    return projectFilteredVisits
       .filter((visit) => {
         if (statusFilter !== "all" && visit.status !== statusFilter) return false;
-        if (projectFilter !== "all") {
-          const matchesProject =
-            visit.projectUuid === filterUuid
-            || visit.projectSlug === filterSlug
-            || visit.projectId === filterSlug
-            || visit.projectId === filterUuid;
-          if (!matchesProject) return false;
-        }
         return true;
       })
       .sort((a, b) => {
@@ -358,11 +377,11 @@ export function VisitsPage() {
         if (dateDelta !== 0) return dateDelta;
         return new Date(b.createdAt ?? b.date).getTime() - new Date(a.createdAt ?? a.date).getTime();
       });
-  }, [visits, statusFilter, projectFilter, projects]);
+  }, [projectFilteredVisits, statusFilter]);
 
-  const totalBreaches = visits.reduce((s, v) => s + v.breachCount, 0);
-  const totalCompleted = visits.filter(v => v.status === "completed").length;
-  const totalDraft     = visits.filter(v => v.status === "draft").length;
+  const totalBreaches = projectFilteredVisits.reduce((s, v) => s + v.breachCount, 0);
+  const totalCompleted = projectFilteredVisits.filter(v => v.status === "completed").length;
+  const totalDraft     = projectFilteredVisits.filter(v => v.status === "draft").length;
 
   return (
     <div className="pb-32">
@@ -382,7 +401,7 @@ export function VisitsPage() {
         {/* Summary pills */}
         <div className="flex gap-2 mt-3">
           {[
-            { label: "Visits", value: visits.length, bg: "rgba(255,255,255,0.15)", text: "white" },
+            { label: "Visits", value: projectFilteredVisits.length, bg: "rgba(255,255,255,0.15)", text: "white" },
             { label: "Complete", value: totalCompleted,  bg: "rgba(74,222,128,0.2)",  text: "#4ADE80" },
             { label: "Draft",    value: totalDraft,      bg: "rgba(251,191,36,0.2)",  text: "#FCD34D" },
             { label: "Breaches", value: totalBreaches,   bg: "rgba(248,113,113,0.2)", text: "#FCA5A5" },
@@ -422,38 +441,28 @@ export function VisitsPage() {
         </div>
 
         {/* Project filter */}
-        {projects.length > 1 && (
-          <div className="flex gap-2 px-4 pb-2.5 overflow-x-auto" style={{ scrollbarWidth: "none" }}>
-            <button
-              onClick={() => setProjectFilter("all")}
-              className="flex-shrink-0 flex items-center gap-1.5 rounded-full px-3 py-1 transition-all"
-              style={{
-                background: projectFilter === "all" ? "#1B4332" : "white",
-                color:      projectFilter === "all" ? "white" : "#6B7280",
-                border: `1px solid ${projectFilter === "all" ? "#1B4332" : "#E5E7EB"}`,
-                fontSize: "0.68rem",
-              }}
+        <div className="px-4 pb-3">
+          <label htmlFor="visits-project-filter" className="sr-only">Project filter</label>
+          <div
+            className="rounded-full px-3 py-2"
+            style={{ background: "#F9FAFB", border: "1px solid #E5E7EB" }}
+          >
+            <select
+              id="visits-project-filter"
+              value={projectFilter}
+              onChange={(event) => setProjectFilter(event.target.value)}
+              className="w-full bg-transparent outline-none"
+              style={{ color: "#1B4332", fontSize: "0.78rem", fontWeight: 600 }}
             >
-              <Filter size={9} />
-              All Projects
-            </button>
-            {projects.map(p => (
-              <button
-                key={p.id}
-                onClick={() => setProjectFilter(p.id)}
-                className="flex-shrink-0 rounded-full px-3 py-1 transition-all"
-                style={{
-                  background: projectFilter === p.id ? "#1B4332" : "white",
-                  color:      projectFilter === p.id ? "white" : "#6B7280",
-                  border: `1px solid ${projectFilter === p.id ? "#1B4332" : "#E5E7EB"}`,
-                  fontSize: "0.68rem", whiteSpace: "nowrap",
-                }}
-              >
-                {p.tabLabel}
-              </button>
-            ))}
+              <option value="all">All Projects</option>
+              {projects.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.name ?? "Unnamed Project"}
+                </option>
+              ))}
+            </select>
           </div>
-        )}
+        </div>
       </div>
 
       {/* Results header */}
