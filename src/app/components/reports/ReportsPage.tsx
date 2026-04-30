@@ -1,11 +1,10 @@
-import React, { useState, useMemo, useEffect, useRef } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { useNavigate } from "react-router";
 import {
   FileDown, AlertCircle,
   Trees, ClipboardCheck, ChevronRight, Archive,
   TrendingUp, Shield, FileText,
 } from "lucide-react";
-import { useProject } from "../../context/ProjectContext";
 import { supabase } from "../../../lib/supabase";
 
 function pctColor(pct: number) {
@@ -69,11 +68,9 @@ function normalizeStatus(raw: string | null): NormalizedStatus {
 
 export function ReportsPage() {
   const navigate = useNavigate();
-  const { selectedProjectId: globalSelectedProjectId } = useProject();
   const [projects, setProjects] = useState<ProjectTabRow[]>([]);
   const [loadingProjects, setLoadingProjects] = useState(true);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
-  const hasAppliedInitialProject = useRef(false);
   const [loadingData, setLoadingData] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [visits, setVisits] = useState<VisitRow[]>([]);
@@ -115,15 +112,6 @@ export function ReportsPage() {
     };
   }, []);
 
-  useEffect(() => {
-    if (hasAppliedInitialProject.current || loadingProjects) return;
-
-    const initialProject = projects.find(
-      (project) => project.id === globalSelectedProjectId || project.slug === globalSelectedProjectId,
-    );
-    setSelectedProjectId(initialProject?.id ?? null);
-    hasAppliedInitialProject.current = true;
-  }, [globalSelectedProjectId, projects, loadingProjects]);
 
   useEffect(() => {
     let mounted = true;
@@ -248,39 +236,32 @@ export function ReportsPage() {
           Reports
         </h1>
 
-        <div className="flex gap-2 mt-3 overflow-x-auto" style={{ scrollbarWidth: "none" }}>
-          <button
-            onClick={() => {
-              setSelectedProjectId(null);
-              console.log("[ReportsPage] selectedProjectId:", null);
-            }}
-            className="flex-shrink-0 rounded-full px-3 py-1.5 transition-all"
-            style={{
-              background: selectedProjectId === null ? "white" : "rgba(255,255,255,0.15)",
-              color:      selectedProjectId === null ? "#1B4332" : "rgba(255,255,255,0.85)",
-              fontSize: "0.7rem", fontWeight: selectedProjectId === null ? 700 : 500,
-            }}
+        <div className="mt-3">
+          <label htmlFor="reports-project-filter" className="sr-only">Project filter</label>
+          <div
+            className="rounded-full px-3 py-2"
+            style={{ background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.28)" }}
           >
-            All Projects
-          </button>
-          {projects.map((p) => (
-            <button
-              key={p.id}
-              onClick={() => {
-                setSelectedProjectId(p.id);
-                console.log("[ReportsPage] selectedProjectId:", p.id);
+            <select
+              id="reports-project-filter"
+              value={selectedProjectId ?? "all"}
+              onChange={(event) => {
+                const value = event.target.value;
+                const nextSelectedProjectId = value === "all" ? null : value;
+                setSelectedProjectId(nextSelectedProjectId);
+                console.log("[ReportsPage] selectedProjectId:", nextSelectedProjectId);
               }}
-              className="flex-shrink-0 rounded-full px-3 py-1.5 transition-all"
-              style={{
-                background: selectedProjectId === p.id ? "white" : "rgba(255,255,255,0.15)",
-                color:      selectedProjectId === p.id ? "#1B4332" : "rgba(255,255,255,0.85)",
-                fontSize: "0.7rem", fontWeight: selectedProjectId === p.id ? 700 : 500,
-                whiteSpace: "nowrap",
-              }}
+              className="w-full bg-transparent outline-none"
+              style={{ color: "white", fontSize: "0.78rem", fontWeight: 600 }}
             >
-              {p.name}
-            </button>
-          ))}
+              <option value="all" style={{ color: "#1B4332" }}>All Projects</option>
+              {projects.map((project) => (
+                <option key={project.id} value={project.id} style={{ color: "#1B4332" }}>
+                  {project.name}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
       </div>
 
