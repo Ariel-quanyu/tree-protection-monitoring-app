@@ -69,6 +69,7 @@ type ProjectTabRow = {
   name: string;
   slug: string | null;
   site_address?: string | null;
+  client_name?: string | null;
   address?: string | null;
 };
 
@@ -140,10 +141,13 @@ export function ReportsPage() {
       try {
         const { data, error } = await supabase
           .from("projects")
-          .select("id, name, slug, site_address, address")
+          .select("id, slug, name, site_address, client_name")
           .order("name", { ascending: true });
 
-        if (error) throw error;
+        if (error) {
+          console.error("[ReportsPage] projectsError:", error);
+          throw error;
+        }
         if (!mounted) return;
 
         const typedProjects = (data ?? []) as ProjectTabRow[];
@@ -187,7 +191,10 @@ export function ReportsPage() {
         }
 
         const { data: visitsData, error: visitsError } = await visitsQuery;
-        if (visitsError) throw visitsError;
+        if (visitsError) {
+          console.error("[ReportsPage] visitsError:", visitsError);
+          throw visitsError;
+        }
 
         let recordsQuery = supabase
           .from("tree_visit_records")
@@ -198,7 +205,10 @@ export function ReportsPage() {
         }
 
         const { data: recordsData, error: recordsError } = await recordsQuery;
-        if (recordsError) throw recordsError;
+        if (recordsError) {
+          console.error("[ReportsPage] treeVisitRecordsError:", recordsError);
+          throw recordsError;
+        }
 
         let treesQuery = supabase
           .from("trees")
@@ -209,7 +219,10 @@ export function ReportsPage() {
         }
 
         const { data: treesData, error: treesError } = await treesQuery;
-        if (treesError) throw treesError;
+        if (treesError) {
+          console.error("[ReportsPage] treesError:", treesError);
+          throw treesError;
+        }
 
         if (!mounted) return;
         const typedVisits = (visitsData ?? []) as VisitRow[];
