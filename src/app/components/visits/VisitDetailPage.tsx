@@ -101,6 +101,14 @@ export function VisitDetailPage() {
     required_measures: string[] | null;
   }
 
+  const safeVisitRecords = treeRecords ?? [];
+  const safeTrees = Array.from(treeMetaByCompositeId.values());
+  const safeProject = visit ?? null;
+  const projectSlugOrName = useMemo(() => {
+    const source = safeProject?.projectId || safeProject?.projectName || "project";
+    return source.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "project";
+  }, [safeProject?.projectId, safeProject?.projectName]);
+
   useEffect(() => {
     let mounted = true;
 
@@ -284,11 +292,6 @@ export function VisitDetailPage() {
   const cfg    = VISIT_TYPE_COLORS[visit.type];
   const pct    = compliancePct(visit.inspectedTrees, visit.breachCount);
   const isDraft = visit.status === "draft";
-  const projectSlugOrName = useMemo(() => {
-    const source = visit.projectId || visit.projectName || "project";
-    return source.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "project";
-  }, [visit.projectId, visit.projectName]);
-
   const handleExportVisitPdf = async () => {
     if (exportingPdf) return;
     setExportingPdf(true);
@@ -300,7 +303,7 @@ export function VisitDetailPage() {
       const margin = 14;
       let y = 20;
 
-      const records = treeRecords;
+      const records = safeVisitRecords;
       const compliantCount = records.filter((record) => record.tpm_status === "compliant").length;
       const notCompliantCount = records.filter((record) => record.tpm_status === "not_compliant").length;
       const breachCount = records.filter((record) => record.tpm_status === "breach").length;
@@ -366,7 +369,7 @@ export function VisitDetailPage() {
           y = 20;
         }
         const compositeId = `${visit.projectId}:${String(record.tree_id ?? "").trim()}`;
-        const tree = treeMetaByCompositeId.get(compositeId);
+        const tree = treeMetaByCompositeId.get(compositeId) ?? safeTrees.find((candidate) => `${candidate.project_id ?? ""}:${String(candidate.tree_id ?? "").trim()}` === compositeId);
         const treeLabel = `Tree ${record.tree_id ?? "Not recorded"} — ${tree?.botanical_name ?? tree?.common_name ?? "Not recorded"}`;
         const lines = [
           treeLabel,
@@ -416,7 +419,7 @@ export function VisitDetailPage() {
         head: [["Tree ID", "Botanical Name", "Common Name", "Location", "Required TPM", "TPM Status", "Health", "Damage", "Notes", "Follow-up Actions"]],
         body: records.map((record) => {
           const compositeId = `${visit.projectId}:${String(record.tree_id ?? "").trim()}`;
-          const tree = treeMetaByCompositeId.get(compositeId);
+          const tree = treeMetaByCompositeId.get(compositeId) ?? safeTrees.find((candidate) => `${candidate.project_id ?? ""}:${String(candidate.tree_id ?? "").trim()}` === compositeId);
           return [
             notRecorded(record.tree_id),
             tree?.botanical_name || "Not recorded",
@@ -655,7 +658,7 @@ export function VisitDetailPage() {
             {/* Export prompt */}
             <button
               onClick={() => void handleExportVisitPdf()}
-              disabled={exportingPdf}
+              disabled={exportingPdf || loadingVisit}
               className="w-full py-3.5 rounded-2xl flex items-center justify-center gap-2 active:scale-[0.98] transition-all"
               style={{ background: "white", border: "1.5px solid #1B4332" }}
             >
