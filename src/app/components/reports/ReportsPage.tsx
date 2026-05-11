@@ -271,11 +271,13 @@ export function ReportsPage() {
   ), 0);
 
   const treesInspected = useMemo(() => {
-    const distinctTreeIds = new Set<string>();
+    const distinctTreeKeys = new Set<string>();
     records.forEach((record) => {
-      if (record.tree_id) distinctTreeIds.add(record.tree_id);
+      const projectId = record.project_id;
+      if (!projectId || !record.tree_id) return;
+      distinctTreeKeys.add(`${projectId}:${record.tree_id}`);
     });
-    return distinctTreeIds.size;
+    return distinctTreeKeys.size;
   }, [records]);
 
   const complianceTotals = useMemo(() => {
@@ -344,17 +346,21 @@ export function ReportsPage() {
 
       const projectById = new Map(exportProjects.map((project) => [project.id, project]));
       const visitById = new Map(exportVisits.map((visit) => [visit.id, visit]));
-      const treeById = new Map<string, TreeRow>();
+      const treeByProjectAndTreeId = new Map<string, TreeRow>();
       exportTrees.forEach((tree) => {
-        treeById.set(tree.id, tree);
-        if (tree.tree_id) treeById.set(tree.tree_id, tree);
+        if (!tree.project_id || !tree.tree_id) return;
+        treeByProjectAndTreeId.set(`${tree.project_id}:${tree.tree_id}`, tree);
       });
 
       const rows: CsvRow[] = exportRecords.map((record) => {
         const visit = record.visit_id ? visitById.get(record.visit_id) : undefined;
         const projectId = visit?.project_id ?? record.project_id ?? null;
         const project = projectId ? projectById.get(projectId) : undefined;
-        const tree = record.tree_id ? treeById.get(record.tree_id) : undefined;
+        const treeLookupProjectId = record.project_id ?? visit?.project_id ?? null;
+        const treeKey = treeLookupProjectId && record.tree_id
+          ? `${treeLookupProjectId}:${record.tree_id}`
+          : null;
+        const tree = treeKey ? treeByProjectAndTreeId.get(treeKey) : undefined;
         return {
           project_name: project?.name ?? "",
           project_address: project?.site_address ?? "",
