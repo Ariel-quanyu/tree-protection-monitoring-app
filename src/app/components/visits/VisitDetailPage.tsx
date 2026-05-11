@@ -37,6 +37,15 @@ function notRecorded(value: string | null | undefined) {
   return value;
 }
 
+function formatRequiredTpm(tree: {
+  required_measures: string[] | null;
+  tree_protection_measures: string | null;
+} | undefined) {
+  const requiredMeasures = (tree?.required_measures ?? []).map((value) => value?.trim()).filter(Boolean);
+  if (requiredMeasures.length > 0) return requiredMeasures.join("; ");
+  return notRecorded(tree?.tree_protection_measures);
+}
+
 async function imageUrlToDataUrl(imageUrl: string): Promise<string> {
   const response = await fetch(imageUrl);
   if (!response.ok) throw new Error(`Failed to load image: ${response.status}`);
@@ -78,10 +87,12 @@ export function VisitDetailPage() {
   const [previewPhotoIndex, setPreviewPhotoIndex] = useState(0);
   const [treeRecords, setTreeRecords] = useState<TreeVisitRecordRow[]>([]);
   const [treeMetaByCompositeId, setTreeMetaByCompositeId] = useState<Map<string, TreeMetaRow>>(new Map());
+  const [visitProjectId, setVisitProjectId] = useState("");
   const [exportingPdf, setExportingPdf] = useState(false);
   const [exportPdfError, setExportPdfError] = useState<string | null>(null);
 
   interface TreeVisitRecordRow {
+    project_id: string | null;
     tree_id: string | null;
     tpm_status: "compliant" | "not_compliant" | "breach" | null;
     health: string | null;
@@ -100,6 +111,14 @@ export function VisitDetailPage() {
     tree_protection_measures: string | null;
     required_measures: string[] | null;
   }
+
+  const safeVisitRecords = treeRecords ?? [];
+  const safeTrees = Array.from(treeMetaByCompositeId.values());
+  const safeProject = visit ?? null;
+  const projectSlugOrName = useMemo(() => {
+    const source = safeProject?.projectId || safeProject?.projectName || "project";
+    return source.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "project";
+  }, [safeProject?.projectId, safeProject?.projectName]);
 
   useEffect(() => {
     let mounted = true;
@@ -144,7 +163,7 @@ export function VisitDetailPage() {
             : Promise.resolve({ data: null, error: null }),
           supabase
             .from("tree_visit_records")
-            .select("tree_id, tpm_status, health, damage, notes, photo_urls, follow_up_actions")
+            .select("project_id, tree_id, tpm_status, health, damage, notes, photo_urls, follow_up_actions")
             .eq("visit_id", id),
           projectId
             ? supabase
@@ -188,7 +207,8 @@ export function VisitDetailPage() {
 
         const normalizedTreeInspections: TreeInspection[] = ((treeRecords ?? []) as TreeVisitRecordRow[]).map((record) => {
           const normalizedTreeId = record.tree_id == null ? "" : String(record.tree_id).trim();
-          const treeMeta = normalizedTreeId ? treeMetaMap.get(`${projectId}:${normalizedTreeId}`) : null;
+          const recordProjectId = String(record.project_id ?? projectId).trim();
+          const treeMeta = normalizedTreeId ? treeMetaMap.get(`${recordProjectId}:${normalizedTreeId}`) : null;
           const photoUrls = Array.isArray(record.photo_urls) ? record.photo_urls.filter(Boolean) : [];
 
           return {
@@ -233,6 +253,7 @@ export function VisitDetailPage() {
 
         if (!mounted) return;
         setVisit(mappedVisit);
+        setVisitProjectId(projectId);
         setTreeRecords((treeRecords ?? []) as TreeVisitRecordRow[]);
         setTreeMetaByCompositeId(treeMetaMap);
         setExportPdfError(null);
@@ -242,6 +263,7 @@ export function VisitDetailPage() {
         if (!mounted) return;
         setVisit(MOCK_VISITS.find((mockVisit) => mockVisit.id === id) ?? null);
         setTreeRecords([]);
+        setVisitProjectId("");
         setTreeMetaByCompositeId(new Map());
         setIsSupabaseVisit(false);
       } finally {
@@ -284,11 +306,6 @@ export function VisitDetailPage() {
   const cfg    = VISIT_TYPE_COLORS[visit.type];
   const pct    = compliancePct(visit.inspectedTrees, visit.breachCount);
   const isDraft = visit.status === "draft";
-  const projectSlugOrName = useMemo(() => {
-    const source = visit.projectId || visit.projectName || "project";
-    return source.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "project";
-  }, [visit.projectId, visit.projectName]);
-
   const handleExportVisitPdf = async () => {
     if (exportingPdf) return;
     setExportingPdf(true);
@@ -300,7 +317,7 @@ export function VisitDetailPage() {
       const margin = 14;
       let y = 20;
 
-      const records = treeRecords;
+      const records = safeVisitRecords;
       const compliantCount = records.filter((record) => record.tpm_status === "compliant").length;
       const notCompliantCount = records.filter((record) => record.tpm_status === "not_compliant").length;
       const breachCount = records.filter((record) => record.tpm_status === "breach").length;
@@ -328,7 +345,7 @@ export function VisitDetailPage() {
       doc.text("Executive Summary", margin, y);
       y += 7;
       doc.setFontSize(10);
-      const summaryText = `This report summarises the tree protection compliance records for this site visit. During this visit, ${inspectedTrees} trees were inspected, ${compliantCount} were compliant, ${notCompliantCount} were not compliant, and ${breachCount} breach records were identified.`;
+      const summaryText = `This report summarises the tree protection compliance records for this site visit. During this visit, ${inspectedTrees} trees were inspected, ${compliantCount} were compliant, ${notCompliantCount} ${notCompliantCount === 1 ? "was" : "were"} not compliant, and ${breachCount} breach ${breachCount === 1 ? "record was" : "records were"} identified.`;
       doc.text(doc.splitTextToSize(summaryText, pageWidth - margin * 2), margin, y);
       y += 14;
 
@@ -365,13 +382,14 @@ export function VisitDetailPage() {
           doc.addPage();
           y = 20;
         }
-        const compositeId = `${visit.projectId}:${String(record.tree_id ?? "").trim()}`;
-        const tree = treeMetaByCompositeId.get(compositeId);
+        const recordProjectId = String(record.project_id ?? visitProjectId).trim();
+        const compositeId = `${recordProjectId}:${String(record.tree_id ?? "").trim()}`;
+        const tree = treeMetaByCompositeId.get(compositeId) ?? safeTrees.find((candidate) => `${candidate.project_id ?? ""}:${String(candidate.tree_id ?? "").trim()}` === compositeId);
         const treeLabel = `Tree ${record.tree_id ?? "Not recorded"} — ${tree?.botanical_name ?? tree?.common_name ?? "Not recorded"}`;
         const lines = [
           treeLabel,
           `Compliance Status: ${formatComplianceStatus(record.tpm_status)}`,
-          `Required Protection Measures: ${tree?.required_measures?.join("; ") || tree?.tree_protection_measures || "Not recorded"}`,
+          `Required Protection Measures: ${formatRequiredTpm(tree)}`,
           `Health: ${notRecorded(record.health)}`,
           `Damage: ${notRecorded(record.damage)}`,
           `Notes: ${notRecorded(record.notes)}`,
@@ -390,7 +408,8 @@ export function VisitDetailPage() {
           try {
             const dataUrl = await imageUrlToDataUrl(photoUrl);
             const imageHeight = 42;
-            if (y + imageHeight > pageHeight - margin) {
+            const photoBlockHeight = imageHeight + 8;
+            if (y + photoBlockHeight > pageHeight - margin) {
               doc.addPage();
               y = 20;
             }
@@ -415,14 +434,15 @@ export function VisitDetailPage() {
         startY: y + 4,
         head: [["Tree ID", "Botanical Name", "Common Name", "Location", "Required TPM", "TPM Status", "Health", "Damage", "Notes", "Follow-up Actions"]],
         body: records.map((record) => {
-          const compositeId = `${visit.projectId}:${String(record.tree_id ?? "").trim()}`;
-          const tree = treeMetaByCompositeId.get(compositeId);
+          const recordProjectId = String(record.project_id ?? visitProjectId).trim();
+          const compositeId = `${recordProjectId}:${String(record.tree_id ?? "").trim()}`;
+          const tree = treeMetaByCompositeId.get(compositeId) ?? safeTrees.find((candidate) => `${candidate.project_id ?? ""}:${String(candidate.tree_id ?? "").trim()}` === compositeId);
           return [
             notRecorded(record.tree_id),
             tree?.botanical_name || "Not recorded",
             tree?.common_name || "Not recorded",
             tree?.location || "Not recorded",
-            tree?.required_measures?.join("; ") || tree?.tree_protection_measures || "Not recorded",
+            formatRequiredTpm(tree),
             formatComplianceStatus(record.tpm_status),
             notRecorded(record.health),
             notRecorded(record.damage),
@@ -655,7 +675,7 @@ export function VisitDetailPage() {
             {/* Export prompt */}
             <button
               onClick={() => void handleExportVisitPdf()}
-              disabled={exportingPdf}
+              disabled={exportingPdf || loadingVisit}
               className="w-full py-3.5 rounded-2xl flex items-center justify-center gap-2 active:scale-[0.98] transition-all"
               style={{ background: "white", border: "1.5px solid #1B4332" }}
             >
