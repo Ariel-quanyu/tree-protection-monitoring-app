@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useParams, useNavigate } from "react-router";
 import {
   ChevronLeft, CheckCircle2, AlertCircle, Trees,
@@ -11,6 +11,8 @@ import {
   type TreeInspection,
 } from "../../data/visitsData";
 import { supabase } from "../../../lib/supabase";
+import { jsPDF } from "jspdf";
+import autoTable from "jspdf-autotable";
 
 function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString("en-AU", {
@@ -21,6 +23,33 @@ function formatDate(iso: string) {
 function compliancePct(inspected: number, breaches: number) {
   if (inspected === 0) return 100;
   return Math.round(((inspected - breaches) / inspected) * 100);
+}
+
+function formatComplianceStatus(status: string | null | undefined) {
+  if (status === "compliant") return "Compliant";
+  if (status === "not_compliant") return "Not Compliant";
+  if (status === "breach") return "Breach";
+  return "Not recorded";
+}
+
+function notRecorded(value: string | null | undefined) {
+  if (!value || !value.trim()) return "Not recorded";
+  return value;
+}
+
+async function imageUrlToDataUrl(imageUrl: string): Promise<string> {
+  const response = await fetch(imageUrl);
+  if (!response.ok) throw new Error(`Failed to load image: ${response.status}`);
+  const blob = await response.blob();
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      if (typeof reader.result === "string") resolve(reader.result);
+      else reject(new Error("Failed to convert image"));
+    };
+    reader.onerror = () => reject(new Error("Failed to read image blob"));
+    reader.readAsDataURL(blob);
+  });
 }
 
 const TPM_COLORS = {
@@ -47,6 +76,10 @@ export function VisitDetailPage() {
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [previewPhotos, setPreviewPhotos] = useState<string[]>([]);
   const [previewPhotoIndex, setPreviewPhotoIndex] = useState(0);
+  const [treeRecords, setTreeRecords] = useState<TreeVisitRecordRow[]>([]);
+  const [treeMetaByCompositeId, setTreeMetaByCompositeId] = useState<Map<string, TreeMetaRow>>(new Map());
+  const [exportingPdf, setExportingPdf] = useState(false);
+  const [exportPdfError, setExportPdfError] = useState<string | null>(null);
 
   interface TreeVisitRecordRow {
     tree_id: string | null;
@@ -54,7 +87,18 @@ export function VisitDetailPage() {
     health: string | null;
     damage: string | null;
     notes: string | null;
+    follow_up_actions: string | null;
     photo_urls: string[] | null;
+  }
+
+  interface TreeMetaRow {
+    project_id: string | null;
+    tree_id: string | null;
+    botanical_name: string | null;
+    common_name: string | null;
+    location: string | null;
+    tree_protection_measures: string | null;
+    required_measures: string[] | null;
   }
 
   useEffect(() => {
@@ -100,7 +144,7 @@ export function VisitDetailPage() {
             : Promise.resolve({ data: null, error: null }),
           supabase
             .from("tree_visit_records")
-            .select("tree_id, tpm_status, health, damage, notes, photo_urls")
+            .select("tree_id, tpm_status, health, damage, notes, photo_urls, follow_up_actions")
             .eq("visit_id", id),
           projectId
             ? supabase
@@ -125,25 +169,26 @@ export function VisitDetailPage() {
           ),
         );
 
-        let treeMetaMap = new Map<string, { botanical_name: string | null; location: string | null }>();
+        let treeMetaMap = new Map<string, TreeMetaRow>();
         if (treeIds.length > 0) {
           const { data: treesData, error: treesError } = await supabase
             .from("trees")
-            .select("tree_id, botanical_name, location")
+            .select("project_id, tree_id, botanical_name, common_name, location, tree_protection_measures, required_measures")
+            .eq("project_id", projectId)
             .in("tree_id", treeIds);
 
           if (treesError) {
             console.warn("Unable to enrich visit detail with tree metadata.", treesError);
           } else {
-            treeMetaMap = new Map<string, { botanical_name: string | null; location: string | null }>(
-              (treesData ?? []).map((tree) => [String(tree.tree_id), { botanical_name: tree.botanical_name, location: tree.location }]),
+            treeMetaMap = new Map<string, TreeMetaRow>(
+              (treesData ?? []).map((tree) => [`${tree.project_id ?? ""}:${String(tree.tree_id ?? "").trim()}`, tree as TreeMetaRow]),
             );
           }
         }
 
         const normalizedTreeInspections: TreeInspection[] = ((treeRecords ?? []) as TreeVisitRecordRow[]).map((record) => {
           const normalizedTreeId = record.tree_id == null ? "" : String(record.tree_id).trim();
-          const treeMeta = normalizedTreeId ? treeMetaMap.get(normalizedTreeId) : null;
+          const treeMeta = normalizedTreeId ? treeMetaMap.get(`${projectId}:${normalizedTreeId}`) : null;
           const photoUrls = Array.isArray(record.photo_urls) ? record.photo_urls.filter(Boolean) : [];
 
           return {
@@ -188,11 +233,16 @@ export function VisitDetailPage() {
 
         if (!mounted) return;
         setVisit(mappedVisit);
+        setTreeRecords((treeRecords ?? []) as TreeVisitRecordRow[]);
+        setTreeMetaByCompositeId(treeMetaMap);
+        setExportPdfError(null);
         setIsSupabaseVisit(true);
       } catch (error) {
         console.error("Failed to fetch visit detail from Supabase:", error);
         if (!mounted) return;
         setVisit(MOCK_VISITS.find((mockVisit) => mockVisit.id === id) ?? null);
+        setTreeRecords([]);
+        setTreeMetaByCompositeId(new Map());
         setIsSupabaseVisit(false);
       } finally {
         if (mounted) setLoadingVisit(false);
@@ -205,6 +255,16 @@ export function VisitDetailPage() {
       mounted = false;
     };
   }, [id]);
+
+  const safeVisit = visit ?? null;
+  const safeVisitRecords = treeRecords ?? [];
+  const safeProject = safeVisit
+    ? { projectId: safeVisit.projectId, projectName: safeVisit.projectName }
+    : null;
+  const projectSlugOrName = useMemo(() => {
+    const source = safeProject?.projectId || safeProject?.projectName || "project";
+    return source.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "project";
+  }, [safeProject?.projectId, safeProject?.projectName]);
 
   if (loadingVisit) {
     return (
@@ -234,6 +294,160 @@ export function VisitDetailPage() {
   const cfg    = VISIT_TYPE_COLORS[visit.type];
   const pct    = compliancePct(visit.inspectedTrees, visit.breachCount);
   const isDraft = visit.status === "draft";
+
+  const handleExportVisitPdf = async () => {
+    if (exportingPdf) return;
+    setExportingPdf(true);
+    setExportPdfError(null);
+    try {
+      const doc = new jsPDF();
+      const pageHeight = doc.internal.pageSize.getHeight();
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const margin = 14;
+      let y = 20;
+
+      const records = safeVisitRecords;
+      const compliantCount = records.filter((record) => record.tpm_status === "compliant").length;
+      const notCompliantCount = records.filter((record) => record.tpm_status === "not_compliant").length;
+      const breachCount = records.filter((record) => record.tpm_status === "breach").length;
+      const inspectedTrees = records.length;
+      const complianceRate = inspectedTrees === 0 ? 0 : Math.round((compliantCount / inspectedTrees) * 100);
+
+      doc.setFontSize(16);
+      doc.text("Site Visit Compliance Report", margin, y);
+      y += 10;
+      doc.setFontSize(11);
+      const headerRows = [
+        ["Project", visit.projectName],
+        ["Visit Date", new Date(visit.date).toLocaleDateString("en-AU")],
+        ["Visit Type", visit.type],
+        ["Inspector", visit.inspector],
+        ["Status", visit.status === "completed" ? "Completed" : "Draft"],
+      ];
+      headerRows.forEach(([label, value]) => {
+        doc.text(`${label}: ${notRecorded(value)}`, margin, y);
+        y += 6;
+      });
+
+      y += 2;
+      doc.setFontSize(13);
+      doc.text("Executive Summary", margin, y);
+      y += 7;
+      doc.setFontSize(10);
+      const summaryText = `This report summarises the tree protection compliance records for this site visit. During this visit, ${inspectedTrees} trees were inspected, ${compliantCount} were compliant, ${notCompliantCount} were not compliant, and ${breachCount} breach records were identified.`;
+      doc.text(doc.splitTextToSize(summaryText, pageWidth - margin * 2), margin, y);
+      y += 14;
+
+      doc.setFontSize(13);
+      doc.text("Visit Summary", margin, y);
+      y += 4;
+      autoTable(doc, {
+        startY: y,
+        head: [["Field", "Value"]],
+        body: [
+          ["Project", visit.projectName],
+          ["Visit Date", new Date(visit.date).toLocaleDateString("en-AU")],
+          ["Visit Type", visit.type],
+          ["Inspector", visit.inspector],
+          ["Total Trees", String(visit.totalTrees)],
+          ["Trees Inspected", String(inspectedTrees)],
+          ["No Change / Carried Forward", String(visit.noChangeTrees)],
+          ["Compliant", String(compliantCount)],
+          ["Not Compliant", String(notCompliantCount)],
+          ["Breaches", String(breachCount)],
+          ["Compliance Rate", `${complianceRate}%`],
+          ["Status", visit.status === "completed" ? "Completed" : "Draft"],
+        ],
+      });
+      y = (doc as jsPDF & { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? y;
+      y += 10;
+
+      doc.setFontSize(13);
+      doc.text("Breach and Non-compliance Records", margin, y);
+      y += 8;
+      const issueRecords = records.filter((record) => record.tpm_status === "not_compliant" || record.tpm_status === "breach");
+      for (const record of issueRecords) {
+        if (y > pageHeight - 55) {
+          doc.addPage();
+          y = 20;
+        }
+        const compositeId = `${visit.projectId}:${String(record.tree_id ?? "").trim()}`;
+        const tree = treeMetaByCompositeId.get(compositeId);
+        const treeLabel = `Tree ${record.tree_id ?? "Not recorded"} — ${tree?.botanical_name ?? tree?.common_name ?? "Not recorded"}`;
+        const lines = [
+          treeLabel,
+          `Compliance Status: ${formatComplianceStatus(record.tpm_status)}`,
+          `Required Protection Measures: ${tree?.required_measures?.join("; ") || tree?.tree_protection_measures || "Not recorded"}`,
+          `Health: ${notRecorded(record.health)}`,
+          `Damage: ${notRecorded(record.damage)}`,
+          `Notes: ${notRecorded(record.notes)}`,
+          `Follow-up Actions: ${notRecorded(record.follow_up_actions)}`,
+        ];
+        doc.setFontSize(10);
+        lines.forEach((line) => {
+          doc.text(doc.splitTextToSize(line, pageWidth - margin * 2), margin, y);
+          y += 5.5;
+        });
+        const photoUrl = Array.isArray(record.photo_urls) ? record.photo_urls[0] : null;
+        if (!photoUrl) {
+          doc.text("Photo evidence: No photo attached", margin, y);
+          y += 7;
+        } else {
+          try {
+            const dataUrl = await imageUrlToDataUrl(photoUrl);
+            const imageHeight = 42;
+            if (y + imageHeight > pageHeight - margin) {
+              doc.addPage();
+              y = 20;
+            }
+            doc.text("Photo evidence:", margin, y);
+            y += 2;
+            doc.addImage(dataUrl, "JPEG", margin, y + 2, 58, imageHeight);
+            y += imageHeight + 8;
+          } catch {
+            doc.text(`Photo evidence: Photo could not be embedded. See photo URL: ${photoUrl}`, margin, y);
+            y += 7;
+          }
+        }
+      }
+
+      if (y > pageHeight - 60) {
+        doc.addPage();
+        y = 20;
+      }
+      doc.setFontSize(13);
+      doc.text("Full Visit Tree Records", margin, y);
+      autoTable(doc, {
+        startY: y + 4,
+        head: [["Tree ID", "Botanical Name", "Common Name", "Location", "Required TPM", "TPM Status", "Health", "Damage", "Notes", "Follow-up Actions"]],
+        body: records.map((record) => {
+          const compositeId = `${visit.projectId}:${String(record.tree_id ?? "").trim()}`;
+          const tree = treeMetaByCompositeId.get(compositeId);
+          return [
+            notRecorded(record.tree_id),
+            tree?.botanical_name || "Not recorded",
+            tree?.common_name || "Not recorded",
+            tree?.location || "Not recorded",
+            tree?.required_measures?.join("; ") || tree?.tree_protection_measures || "Not recorded",
+            formatComplianceStatus(record.tpm_status),
+            notRecorded(record.health),
+            notRecorded(record.damage),
+            notRecorded(record.notes),
+            notRecorded(record.follow_up_actions),
+          ];
+        }),
+        styles: { fontSize: 8, cellPadding: 2 },
+      });
+
+      const formattedDate = new Date(visit.date).toISOString().split("T")[0];
+      doc.save(`visit_report_${projectSlugOrName}_${formattedDate}.pdf`);
+    } catch (error) {
+      console.error("Failed to export visit PDF:", error);
+      setExportPdfError("Unable to export the visit report right now. Please try again.");
+    } finally {
+      setExportingPdf(false);
+    }
+  };
 
   const handleDeleteVisit = async () => {
     if (!isSupabaseVisit || deletingVisit) return;
@@ -446,15 +660,21 @@ export function VisitDetailPage() {
 
             {/* Export prompt */}
             <button
-              onClick={() => {/* TODO */}}
+              onClick={() => void handleExportVisitPdf()}
+              disabled={exportingPdf || loadingVisit || !safeVisit}
               className="w-full py-3.5 rounded-2xl flex items-center justify-center gap-2 active:scale-[0.98] transition-all"
               style={{ background: "white", border: "1.5px solid #1B4332" }}
             >
               <FileText size={16} color="#1B4332" />
               <span style={{ color: "#1B4332", fontSize: "0.85rem", fontWeight: 700 }}>
-                Export Visit Report (PDF)
+                {exportingPdf ? "Generating PDF..." : "Export Visit Report (PDF)"}
               </span>
             </button>
+            {exportPdfError && (
+              <p style={{ color: "#B91C1C", fontSize: "0.78rem" }}>
+                {exportPdfError}
+              </p>
+            )}
 
             {isSupabaseVisit && (
               <div className="pt-2">
