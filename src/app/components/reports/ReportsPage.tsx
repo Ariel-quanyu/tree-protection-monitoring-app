@@ -46,16 +46,66 @@ type VisitRow = {
 };
 
 type TreeVisitRecordRow = {
+  id?: string;
+  project_id?: string | null;
   visit_id: string | null;
   tree_id: string | null;
   tpm_status: string | null;
+  health?: string | null;
+  structure?: string | null;
+  damage?: string | null;
+  notes?: string | null;
+  follow_up_actions?: string | null;
+  photo_urls?: string[] | null;
+  created_at?: string | null;
+  updated_at?: string | null;
 };
 
 type ProjectTabRow = {
   id: string;
   name: string;
   slug: string | null;
+  site_address?: string | null;
+  address?: string | null;
 };
+
+type TreeRow = {
+  id: string;
+  project_id: string | null;
+  tree_id: string | null;
+  botanical_name: string | null;
+  common_name: string | null;
+  location: string | null;
+  retention_status: string | null;
+  tree_protection_measures?: string | null;
+  required_measures?: string[] | null;
+  health?: string | null;
+  structure?: string | null;
+  nrz_radius_m?: number | null;
+  srz_radius_m?: number | null;
+  nrz_encroachment?: string | null;
+  encroachment_class?: string | null;
+};
+
+type CsvRow = Record<string, string | number | null | undefined>;
+
+const CSV_COLUMNS = [
+  "project_name", "project_address", "visit_date", "visit_type", "inspector_name", "visit_status",
+  "tree_id", "botanical_name", "common_name", "location", "retention_status", "required_protection_measures",
+  "initial_health", "initial_structure", "current_health", "current_structure", "compliance_status", "tree_damage",
+  "notes", "follow_up_actions", "photo_urls", "nrz_radius_m", "srz_radius_m", "encroachment", "created_at", "updated_at",
+] as const;
+
+function toSemicolon(value: unknown): string {
+  if (!Array.isArray(value)) return "";
+  return value.filter(Boolean).map((item) => String(item)).join("; ");
+}
+
+function toCsvCell(value: unknown): string {
+  const raw = value == null ? "" : String(value);
+  const escaped = raw.replace(/"/g, '""');
+  return `"${escaped}"`;
+}
 
 function normalizeStatus(raw: string | null): NormalizedStatus {
   if (!raw) return null;
@@ -75,6 +125,7 @@ export function ReportsPage() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [visits, setVisits] = useState<VisitRow[]>([]);
   const [records, setRecords] = useState<TreeVisitRecordRow[]>([]);
+  const [trees, setTrees] = useState<TreeRow[]>([]);
 
   useEffect(() => {
     let mounted = true;
@@ -84,7 +135,7 @@ export function ReportsPage() {
       try {
         const { data, error } = await supabase
           .from("projects")
-          .select("id, name, slug")
+          .select("id, name, slug, site_address, address")
           .order("name", { ascending: true });
 
         if (error) throw error;
@@ -135,7 +186,7 @@ export function ReportsPage() {
 
         let recordsQuery = supabase
           .from("tree_visit_records")
-          .select("visit_id, tree_id, tpm_status");
+          .select("id, project_id, visit_id, tree_id, tpm_status, health, structure, damage, notes, follow_up_actions, photo_urls, created_at, updated_at");
 
         if (selectedProjectId) {
           recordsQuery = recordsQuery.eq("project_id", selectedProjectId);
@@ -144,11 +195,24 @@ export function ReportsPage() {
         const { data: recordsData, error: recordsError } = await recordsQuery;
         if (recordsError) throw recordsError;
 
+        let treesQuery = supabase
+          .from("trees")
+          .select("id, project_id, tree_id, botanical_name, common_name, location, retention_status, tree_protection_measures, required_measures, health, structure, nrz_radius_m, srz_radius_m, nrz_encroachment, encroachment_class");
+
+        if (selectedProjectId) {
+          treesQuery = treesQuery.eq("project_id", selectedProjectId);
+        }
+
+        const { data: treesData, error: treesError } = await treesQuery;
+        if (treesError) throw treesError;
+
         if (!mounted) return;
         const typedVisits = (visitsData ?? []) as VisitRow[];
         const typedRecords = (recordsData ?? []) as TreeVisitRecordRow[];
+        const typedTrees = (treesData ?? []) as TreeRow[];
         setVisits(typedVisits);
         setRecords(typedRecords);
+        setTrees(typedTrees);
         console.log(
           "[ReportsPage] loaded data:",
           { selectedProjectId, visits: typedVisits.length, treeVisitRecords: typedRecords.length },
@@ -159,6 +223,7 @@ export function ReportsPage() {
         setErrorMessage("Failed to load report data. Please try again.");
         setVisits([]);
         setRecords([]);
+        setTrees([]);
       } finally {
         if (mounted) setLoadingData(false);
       }
@@ -221,6 +286,79 @@ export function ReportsPage() {
     });
     return Object.entries(counts).sort((a, b) => b[1] - a[1]);
   }, [visits]);
+
+  const handleExportCsv = () => {
+    const projectById = new Map(projects.map((p) => [p.id, p]));
+    const treeByVisitAndTree = new Map<string, TreeRow>();
+    const treeByTreeOnly = new Map<string, TreeRow>();
+    trees.forEach((tree) => {
+      treeByTreeOnly.set(tree.id, tree);
+      if (tree.tree_id) treeByTreeOnly.set(tree.tree_id, tree);
+    });
+    visits.forEach((visit) => {
+      const visitRecords = recordsByVisitId.get(visit.id) ?? [];
+      visitRecords.forEach((record) => {
+        const key = `${visit.id}::${record.tree_id ?? ""}`;
+        const tree = (record.tree_id && treeByTreeOnly.get(record.tree_id)) || undefined;
+        if (tree) treeByVisitAndTree.set(key, tree);
+      });
+    });
+
+    const rows: CsvRow[] = [];
+    visits.forEach((visit) => {
+      const visitRecords = recordsByVisitId.get(visit.id) ?? [];
+      visitRecords.forEach((record) => {
+        const project = visit.project_id ? projectById.get(visit.project_id) : undefined;
+        const tree = treeByVisitAndTree.get(`${visit.id}::${record.tree_id ?? ""}`) || (record.tree_id ? treeByTreeOnly.get(record.tree_id) : undefined);
+        rows.push({
+          project_name: project?.name ?? "",
+          project_address: project?.site_address ?? project?.address ?? "",
+          visit_date: visit.inspection_date ?? "",
+          visit_type: visit.visit_type ?? "",
+          inspector_name: visit.inspector_name ?? "",
+          visit_status: "",
+          tree_id: tree?.tree_id ?? record.tree_id ?? "",
+          botanical_name: tree?.botanical_name ?? "",
+          common_name: tree?.common_name ?? "",
+          location: tree?.location ?? "",
+          retention_status: tree?.retention_status ?? "",
+          required_protection_measures: toSemicolon(tree?.required_measures) || tree?.tree_protection_measures || "",
+          initial_health: tree?.health ?? "",
+          initial_structure: tree?.structure ?? "",
+          current_health: record.health ?? "",
+          current_structure: record.structure ?? "",
+          compliance_status: record.tpm_status ?? "",
+          tree_damage: record.damage ?? "",
+          notes: record.notes ?? "",
+          follow_up_actions: record.follow_up_actions ?? "",
+          photo_urls: toSemicolon(record.photo_urls),
+          nrz_radius_m: tree?.nrz_radius_m ?? "",
+          srz_radius_m: tree?.srz_radius_m ?? "",
+          encroachment: tree?.nrz_encroachment ?? tree?.encroachment_class ?? "",
+          created_at: record.created_at ?? visit.created_at ?? "",
+          updated_at: record.updated_at ?? "",
+        });
+      });
+    });
+
+    const header = CSV_COLUMNS.join(",");
+    const body = rows
+      .map((row) => CSV_COLUMNS.map((column) => toCsvCell(row[column])).join(","))
+      .join("\n");
+    const csv = `${header}\n${body}`;
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const selectedProject = selectedProjectId ? projects.find((project) => project.id === selectedProjectId) : null;
+    link.href = url;
+    link.download = selectedProject?.slug
+      ? `${selectedProject.slug}_compliance_log.csv`
+      : "all_projects_compliance_log.csv";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <div className="pb-32">
@@ -419,14 +557,15 @@ export function ReportsPage() {
           </div>
           {[
             { icon: FileDown, label: "Export PDF Report",       sub: "Visit-by-visit compliance summary", color: "#DC2626", bg: "#FEF2F2" },
-            { icon: FileText, label: "Export CSV — Full Log",   sub: "All visits, all trees, all fields",  color: "#1D4ED8", bg: "#EFF6FF" },
+            { icon: FileText, label: "Export CSV — Full Log",   sub: selectedProjectId ? "Selected project compliance log" : "All visits, all trees, all fields", color: "#1D4ED8", bg: "#EFF6FF" },
           ].map(({ icon: Icon, label, sub, color, bg }) => (
             <button
               key={label}
-              className="w-full flex items-center gap-3.5 px-4 py-4 text-left transition-colors opacity-70 cursor-not-allowed"
+              className="w-full flex items-center gap-3.5 px-4 py-4 text-left transition-colors"
               style={{ borderBottom: "1px solid #F9FAFB" }}
-              disabled
-              title="Coming soon"
+              onClick={label === "Export CSV — Full Log" ? handleExportCsv : undefined}
+              disabled={label !== "Export CSV — Full Log"}
+              title={label === "Export CSV — Full Log" ? "Export CSV" : "Coming soon"}
             >
               <div className="rounded-xl flex items-center justify-center flex-shrink-0"
                 style={{ width: 38, height: 38, background: bg }}>
@@ -434,7 +573,7 @@ export function ReportsPage() {
               </div>
               <div className="flex-1 min-w-0">
                 <p style={{ color: "#111827", fontSize: "0.82rem", fontWeight: 600 }}>{label}</p>
-                <p style={{ color: "#9CA3AF", fontSize: "0.68rem", marginTop: 1 }}>{sub} · Coming soon</p>
+                <p style={{ color: "#9CA3AF", fontSize: "0.68rem", marginTop: 1 }}>{label === "Export CSV — Full Log" ? sub : `${sub} · Coming soon`}</p>
               </div>
               <ChevronRight size={14} color="#D1D5DB" style={{ flexShrink: 0 }} />
             </button>
