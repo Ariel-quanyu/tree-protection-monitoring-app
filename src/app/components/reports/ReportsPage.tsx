@@ -6,6 +6,8 @@ import {
   TrendingUp, Shield, FileText,
 } from "lucide-react";
 import { supabase } from "../../../lib/supabase";
+import { jsPDF } from "jspdf";
+import autoTable from "jspdf-autotable";
 
 function pctColor(pct: number) {
   if (pct >= 90) return "#15803D";
@@ -119,6 +121,29 @@ function normalizeStatus(raw: string | null): NormalizedStatus {
   return null;
 }
 
+
+
+function formatReadableDate(dateValue: string | null | undefined): string {
+  if (!dateValue) return "";
+  const parsed = new Date(dateValue);
+  if (Number.isNaN(parsed.getTime())) return "";
+  return parsed.toLocaleDateString("en-AU", { year: "numeric", month: "short", day: "numeric" });
+}
+
+async function imageUrlToDataUrl(imageUrl: string): Promise<string> {
+  const response = await fetch(imageUrl);
+  if (!response.ok) throw new Error(`Failed to load image: ${response.status}`);
+  const blob = await response.blob();
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      if (typeof reader.result === "string") resolve(reader.result);
+      else reject(new Error("Failed to convert image"));
+    };
+    reader.onerror = () => reject(new Error("Failed to read image blob"));
+    reader.readAsDataURL(blob);
+  });
+}
 function formatComplianceStatusForCsv(raw: string | null): string {
   const status = normalizeStatus(raw);
   if (status === "compliant") return "Compliant";
@@ -136,6 +161,7 @@ export function ReportsPage() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [exportErrorMessage, setExportErrorMessage] = useState<string | null>(null);
   const [exportingCsv, setExportingCsv] = useState(false);
+  const [exportingPdf, setExportingPdf] = useState(false);
   const [visits, setVisits] = useState<VisitRow[]>([]);
   const [records, setRecords] = useState<TreeVisitRecordRow[]>([]);
   const [trees, setTrees] = useState<TreeRow[]>([]);
@@ -420,6 +446,170 @@ export function ReportsPage() {
     }
   };
 
+
+
+  const handleExportPdf = async () => {
+    setExportErrorMessage(null);
+    setExportingPdf(true);
+    try {
+      const exportProjects = selectedProjectId
+        ? projects.filter((project) => project.id === selectedProjectId)
+        : projects;
+      const projectById = new Map(exportProjects.map((project) => [project.id, project]));
+      const visitById = new Map(visits.map((visit) => [visit.id, visit]));
+      const treeByProjectAndTreeId = new Map<string, TreeRow>();
+      trees.forEach((tree) => {
+        if (!tree.project_id || !tree.tree_id) return;
+        treeByProjectAndTreeId.set(`${tree.project_id}:${tree.tree_id}`, tree);
+      });
+
+      const doc = new jsPDF({ unit: "mm", format: "a4" });
+      const pageHeight = doc.internal.pageSize.getHeight();
+
+      const selectedProject = selectedProjectId ? exportProjects.find((project) => project.id === selectedProjectId) : null;
+      doc.setFontSize(18);
+      doc.text("Tree Protection Compliance Report", 14, 16);
+      doc.setFontSize(11);
+      doc.text(selectedProject ? `Project: ${selectedProject.name}` : "Scope: All Projects", 14, 24);
+      if (selectedProject?.site_address) {
+        doc.text(`Site Address: ${selectedProject.site_address}`, 14, 30);
+      }
+      doc.text(`Generated Date: ${new Date().toLocaleDateString("en-AU")}`, 14, selectedProject?.site_address ? 36 : 30);
+
+      const statsStartY = selectedProject?.site_address ? 44 : 38;
+      autoTable(doc, {
+        startY: statsStartY,
+        theme: "grid",
+        head: [["Total Visits", "Average Compliance %", "Total Breaches", "Trees Inspected"]],
+        body: [[String(totalVisits), `${avgCompliance}%`, String(totalBreaches), String(treesInspected)]],
+      });
+
+      const visitRows = visits.map((visit) => {
+        const visitRecords = recordsByVisitId.get(visit.id) ?? [];
+        const knownCount = visitRecords.reduce((sum, record) => normalizeStatus(record.tpm_status) ? sum + 1 : sum, 0);
+        const compliantCount = visitRecords.reduce((sum, record) => normalizeStatus(record.tpm_status) === "compliant" ? sum + 1 : sum, 0);
+        const breachCount = visitRecords.reduce((sum, record) => normalizeStatus(record.tpm_status) === "breach" ? sum + 1 : sum, 0);
+        const pct = knownCount > 0 ? Math.round((compliantCount / knownCount) * 100) : 0;
+        return [
+          formatReadableDate(visit.inspection_date ?? visit.created_at),
+          visit.visit_type ?? "",
+          visit.inspector_name ?? "",
+          String(visitRecords.length),
+          `${pct}%`,
+          String(breachCount),
+        ];
+      });
+
+      autoTable(doc, {
+        startY: (((doc as unknown as { lastAutoTable?: { finalY?: number } }).lastAutoTable?.finalY) ?? statsStartY) + 8,
+        head: [["Inspection Date", "Visit Type", "Inspector", "Trees Inspected", "Compliance %", "Breaches"]],
+        body: visitRows.length > 0 ? visitRows : [["", "", "", "0", "0%", "0"]],
+        theme: "striped",
+        styles: { fontSize: 9 },
+      });
+
+      let nextY = ((((doc as unknown as { lastAutoTable?: { finalY?: number } }).lastAutoTable?.finalY) ?? 60) + 10);
+      doc.setFontSize(13);
+      doc.text("Non-compliance and Breach Records", 14, nextY);
+      nextY += 6;
+
+      const breachRecords = records.filter((record) => {
+        const status = normalizeStatus(record.tpm_status);
+        return status === "not_compliant" || status === "breach";
+      });
+
+      if (breachRecords.length === 0) {
+        doc.setFontSize(10);
+        doc.text("No non-compliance or breach records found.", 14, nextY);
+        nextY += 10;
+      } else {
+        for (const record of breachRecords) {
+          const visit = record.visit_id ? visitById.get(record.visit_id) : undefined;
+          const projectId = record.project_id ?? visit?.project_id ?? null;
+          const project = projectId ? projectById.get(projectId) : undefined;
+          const treeKey = projectId && record.tree_id ? `${projectId}:${record.tree_id}` : null;
+          const tree = treeKey ? treeByProjectAndTreeId.get(treeKey) : undefined;
+
+          autoTable(doc, {
+            startY: nextY,
+            theme: "grid",
+            styles: { fontSize: 9, cellPadding: 1.5 },
+            columnStyles: { 0: { cellWidth: 55 }, 1: { cellWidth: 125 } },
+            body: [
+              ["Project", project?.name ?? ""],
+              ["Tree ID", tree?.tree_id ?? record.tree_id ?? ""],
+              ["Species", tree?.botanical_name ?? ""],
+              ["Required Protection Measures", toSemicolon(tree?.required_measures) || tree?.tree_protection_measures || ""],
+              ["Compliance Status", formatComplianceStatusForCsv(record.tpm_status)],
+              ["Damage", record.damage ?? ""],
+              ["Notes", record.notes ?? ""],
+              ["Follow-up Actions", record.follow_up_actions ?? ""],
+            ],
+          });
+          nextY = (((doc as unknown as { lastAutoTable?: { finalY?: number } }).lastAutoTable?.finalY) ?? nextY) + 3;
+
+          const firstPhotoUrl = record.photo_urls?.[0];
+          if (firstPhotoUrl) {
+            if (nextY + 30 > pageHeight - 12) {
+              doc.addPage();
+              nextY = 14;
+            }
+            try {
+              const dataUrl = await imageUrlToDataUrl(firstPhotoUrl);
+              doc.setFontSize(9);
+              doc.text("Photo:", 14, nextY + 4);
+              doc.addImage(dataUrl, "JPEG", 14, nextY + 6, 35, 25);
+              nextY += 34;
+            } catch (error) {
+              console.warn("Failed to embed report photo:", error);
+              doc.setFontSize(9);
+              const wrapped = doc.splitTextToSize(`Photo URL: ${firstPhotoUrl}`, 180);
+              doc.text(wrapped, 14, nextY + 4);
+              nextY += (wrapped.length * 4) + 2;
+            }
+          }
+
+          if (nextY > pageHeight - 20) {
+            doc.addPage();
+            nextY = 14;
+          }
+        }
+      }
+
+      autoTable(doc, {
+        startY: nextY + 4,
+        head: [["Project", "Tree ID", "Botanical Name", "Common Name", "Location", "Required TPM", "Current TPM Status", "Health", "Damage", "Follow-up Actions"]],
+        body: records.map((record) => {
+          const visit = record.visit_id ? visitById.get(record.visit_id) : undefined;
+          const projectId = record.project_id ?? visit?.project_id ?? null;
+          const project = projectId ? projectById.get(projectId) : undefined;
+          const treeKey = projectId && record.tree_id ? `${projectId}:${record.tree_id}` : null;
+          const tree = treeKey ? treeByProjectAndTreeId.get(treeKey) : undefined;
+          return [
+            project?.name ?? "",
+            tree?.tree_id ?? record.tree_id ?? "",
+            tree?.botanical_name ?? "",
+            tree?.common_name ?? "",
+            tree?.location ?? "",
+            toSemicolon(tree?.required_measures) || tree?.tree_protection_measures || "",
+            formatComplianceStatusForCsv(record.tpm_status),
+            record.health ?? "",
+            record.damage ?? "",
+            record.follow_up_actions ?? "",
+          ];
+        }),
+        styles: { fontSize: 8 },
+      });
+
+      const filename = selectedProject?.slug ? `${selectedProject.slug}_compliance_report.pdf` : "all_projects_compliance_report.pdf";
+      doc.save(filename);
+    } catch (error) {
+      console.error("Failed to export PDF:", error);
+      setExportErrorMessage("Failed to export PDF report. Please try again.");
+    } finally {
+      setExportingPdf(false);
+    }
+  };
   return (
     <div className="pb-32">
       <div
@@ -623,9 +813,9 @@ export function ReportsPage() {
               key={label}
               className="w-full flex items-center gap-3.5 px-4 py-4 text-left transition-colors"
               style={{ borderBottom: "1px solid #F9FAFB" }}
-              onClick={label === "Export CSV — Full Log" ? () => { void handleExportCsv(); } : undefined}
-              disabled={label !== "Export CSV — Full Log" || exportingCsv}
-              title={label === "Export CSV — Full Log" ? "Export CSV" : "Coming soon"}
+              onClick={label === "Export CSV — Full Log" ? () => { void handleExportCsv(); } : () => { void handleExportPdf(); }}
+              disabled={label === "Export CSV — Full Log" ? exportingCsv || exportingPdf : exportingCsv || exportingPdf}
+              title={label === "Export CSV — Full Log" ? "Export CSV" : "Export PDF"}
             >
               <div className="rounded-xl flex items-center justify-center flex-shrink-0"
                 style={{ width: 38, height: 38, background: bg }}>
@@ -633,7 +823,7 @@ export function ReportsPage() {
               </div>
               <div className="flex-1 min-w-0">
                 <p style={{ color: "#111827", fontSize: "0.82rem", fontWeight: 600 }}>{label}</p>
-                <p style={{ color: "#9CA3AF", fontSize: "0.68rem", marginTop: 1 }}>{label === "Export CSV — Full Log" ? (exportingCsv ? "Exporting CSV..." : sub) : `${sub} · Coming soon`}</p>
+                <p style={{ color: "#9CA3AF", fontSize: "0.68rem", marginTop: 1 }}>{label === "Export CSV — Full Log" ? (exportingCsv ? "Exporting CSV..." : sub) : (exportingPdf ? "Generating PDF..." : sub)}</p>
               </div>
               <ChevronRight size={14} color="#D1D5DB" style={{ flexShrink: 0 }} />
             </button>
