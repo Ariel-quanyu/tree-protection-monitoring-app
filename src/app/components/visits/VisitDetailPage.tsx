@@ -37,6 +37,14 @@ function notRecorded(value: string | null | undefined) {
   return value;
 }
 
+function hasRealValue(value: string | null | undefined) {
+  if (value == null) return false;
+  const normalized = value.trim();
+  if (!normalized) return false;
+  const lower = normalized.toLowerCase();
+  return lower !== "not recorded" && lower !== "null";
+}
+
 async function imageUrlToDataUrl(imageUrl: string): Promise<string> {
   const response = await fetch(imageUrl);
   if (!response.ok) throw new Error(`Failed to load image: ${response.status}`);
@@ -435,17 +443,33 @@ export function VisitDetailPage() {
       }
       doc.setFontSize(13);
       doc.text("Full Visit Tree Records", margin, y);
+      const fullVisitRows = records.map((record) => {
+        const compositeId = resolveRecordCompositeId(record);
+        const tree = treeMetaByCompositeId.get(compositeId) ?? safeTrees.find((candidate) => buildTreeCompositeId(candidate.project_id, candidate.tree_id) === compositeId);
+        return { record, tree };
+      });
+      const includeCommonName = fullVisitRows.some(({ tree }) => hasRealValue(tree?.common_name));
+      const includeLocation = fullVisitRows.some(({ tree }) => hasRealValue(tree?.location));
       autoTable(doc, {
         startY: y + 4,
-        head: [["Tree ID", "Botanical Name", "Common Name", "Location", "Required TPM", "TPM Status", "Health", "Damage", "Notes", "Follow-up Actions"]],
-        body: records.map((record) => {
-          const compositeId = resolveRecordCompositeId(record);
-          const tree = treeMetaByCompositeId.get(compositeId) ?? safeTrees.find((candidate) => buildTreeCompositeId(candidate.project_id, candidate.tree_id) === compositeId);
-          return [
+        head: [[
+          "Tree ID",
+          "Botanical Name",
+          ...(includeCommonName ? ["Common Name"] : []),
+          ...(includeLocation ? ["Location"] : []),
+          "Required TPM",
+          "TPM Status",
+          "Health",
+          "Damage",
+          "Notes",
+          "Follow-up Actions",
+        ]],
+        body: fullVisitRows.map(({ record, tree }) => {
+          const row = [
             notRecorded(record.tree_id),
             tree?.botanical_name || "Not recorded",
-            tree?.common_name || "Not recorded",
-            tree?.location || "Not recorded",
+            ...(includeCommonName ? [notRecorded(tree?.common_name)] : []),
+            ...(includeLocation ? [notRecorded(tree?.location)] : []),
             formatRequiredTpm(tree),
             formatComplianceStatus(record.tpm_status),
             notRecorded(record.health),
@@ -453,6 +477,7 @@ export function VisitDetailPage() {
             notRecorded(record.notes),
             notRecorded(record.follow_up_actions),
           ];
+          return row;
         }),
         styles: { fontSize: 8, cellPadding: 2 },
       });
