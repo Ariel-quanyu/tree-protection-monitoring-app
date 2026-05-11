@@ -119,6 +119,14 @@ function normalizeStatus(raw: string | null): NormalizedStatus {
   return null;
 }
 
+function formatComplianceStatusForCsv(raw: string | null): string {
+  const status = normalizeStatus(raw);
+  if (status === "compliant") return "Compliant";
+  if (status === "not_compliant") return "Not Compliant";
+  if (status === "breach") return "Breach";
+  return raw ?? "";
+}
+
 export function ReportsPage() {
   const navigate = useNavigate();
   const [projects, setProjects] = useState<ProjectTabRow[]>([]);
@@ -378,7 +386,7 @@ export function ReportsPage() {
           initial_structure: tree?.structure ?? "",
           current_health: record.health ?? "",
           current_structure: "",
-          compliance_status: record.tpm_status ?? "",
+          compliance_status: formatComplianceStatusForCsv(record.tpm_status),
           tree_damage: record.damage ?? "",
           notes: record.notes ?? "",
           follow_up_actions: record.follow_up_actions ?? "",
