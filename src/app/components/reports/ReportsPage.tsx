@@ -303,6 +303,10 @@ export function ReportsPage() {
   const totalBreaches = records.reduce((sum, record) => (
     normalizeStatus(record.tpm_status) === "breach" ? sum + 1 : sum
   ), 0);
+  const totalIssues = records.reduce((sum, record) => {
+    const status = normalizeStatus(record.tpm_status);
+    return status === "breach" || status === "not_compliant" ? sum + 1 : sum;
+  }, 0);
 
   const treesInspected = useMemo(() => {
     const distinctTreeKeys = new Set<string>();
@@ -477,11 +481,21 @@ export function ReportsPage() {
       doc.text(`Generated Date: ${new Date().toLocaleDateString("en-AU")}`, 14, selectedProject?.site_address ? 36 : 30);
 
       const statsStartY = selectedProject?.site_address ? 44 : 38;
+      doc.setFontSize(13);
+      doc.text("Executive Summary", 14, statsStartY);
+      doc.setFontSize(10);
+      const executiveSummary = selectedProject
+        ? `This report summarises tree protection compliance records for ${selectedProject.name}. Across ${totalVisits} site visits, ${treesInspected} trees were inspected and ${totalIssues} compliance issues were recorded.`
+        : `This report summarises tree protection compliance records across all active projects. Across ${totalVisits} site visits, ${treesInspected} trees were inspected and ${totalIssues} compliance issues were recorded.`;
+      doc.text(doc.splitTextToSize(executiveSummary, 182), 14, statsStartY + 6);
+
+      doc.setFontSize(13);
+      doc.text("Project Summary", 14, statsStartY + 18);
       autoTable(doc, {
-        startY: statsStartY,
+        startY: statsStartY + 22,
         theme: "grid",
-        head: [["Total Visits", "Average Compliance %", "Total Breaches", "Trees Inspected"]],
-        body: [[String(totalVisits), `${avgCompliance}%`, String(totalBreaches), String(treesInspected)]],
+        head: [["Total Visits", "Overall Compliance Rate", "Total Issues", "Trees Inspected"]],
+        body: [[String(totalVisits), `${avgCompliance}%`, String(totalIssues), String(treesInspected)]],
       });
 
       const visitRows = visits.map((visit) => {
@@ -490,20 +504,23 @@ export function ReportsPage() {
         const compliantCount = visitRecords.reduce((sum, record) => normalizeStatus(record.tpm_status) === "compliant" ? sum + 1 : sum, 0);
         const breachCount = visitRecords.reduce((sum, record) => normalizeStatus(record.tpm_status) === "breach" ? sum + 1 : sum, 0);
         const pct = knownCount > 0 ? Math.round((compliantCount / knownCount) * 100) : 0;
+        const nonCompliantCount = visitRecords.reduce((sum, record) => normalizeStatus(record.tpm_status) === "not_compliant" ? sum + 1 : sum, 0);
         return [
           formatReadableDate(visit.inspection_date ?? visit.created_at),
-          visit.visit_type ?? "",
-          visit.inspector_name ?? "",
+          visit.visit_type ?? "Not recorded",
+          visit.inspector_name ?? "Not recorded",
           String(visitRecords.length),
-          `${pct}%`,
+          String(compliantCount),
+          String(nonCompliantCount),
           String(breachCount),
+          `${pct}%`,
         ];
       });
 
       autoTable(doc, {
         startY: (((doc as unknown as { lastAutoTable?: { finalY?: number } }).lastAutoTable?.finalY) ?? statsStartY) + 8,
-        head: [["Inspection Date", "Visit Type", "Inspector", "Trees Inspected", "Compliance %", "Breaches"]],
-        body: visitRows.length > 0 ? visitRows : [["", "", "", "0", "0%", "0"]],
+        head: [["Inspection Date", "Visit Type", "Inspector", "Trees Inspected", "Compliant", "Not Compliant", "Breach", "Compliance %"]],
+        body: visitRows.length > 0 ? visitRows : [["Not recorded", "Not recorded", "Not recorded", "0", "0", "0", "0", "0%"]],
         theme: "striped",
         styles: { fontSize: 9 },
       });
@@ -536,14 +553,13 @@ export function ReportsPage() {
             styles: { fontSize: 9, cellPadding: 1.5 },
             columnStyles: { 0: { cellWidth: 55 }, 1: { cellWidth: 125 } },
             body: [
-              ["Project", project?.name ?? ""],
-              ["Tree ID", tree?.tree_id ?? record.tree_id ?? ""],
-              ["Species", tree?.botanical_name ?? ""],
-              ["Required Protection Measures", toSemicolon(tree?.required_measures) || tree?.tree_protection_measures || ""],
-              ["Compliance Status", formatComplianceStatusForCsv(record.tpm_status)],
-              ["Damage", record.damage ?? ""],
-              ["Notes", record.notes ?? ""],
-              ["Follow-up Actions", record.follow_up_actions ?? ""],
+              ["Tree", `Tree ${tree?.tree_id ?? record.tree_id ?? "Not recorded"} — ${tree?.botanical_name ?? "Not recorded"}`],
+              ["Project", project?.name ?? "Not recorded"],
+              ["Compliance Status", formatComplianceStatusForCsv(record.tpm_status) || "Not recorded"],
+              ["Required Protection Measures", toSemicolon(tree?.required_measures) || tree?.tree_protection_measures || "Not recorded"],
+              ["Damage", record.damage ?? "Not recorded"],
+              ["Notes", record.notes ?? "Not recorded"],
+              ["Follow-up Actions", record.follow_up_actions ?? "Not recorded"],
             ],
           });
           nextY = (((doc as unknown as { lastAutoTable?: { finalY?: number } }).lastAutoTable?.finalY) ?? nextY) + 3;
@@ -557,16 +573,20 @@ export function ReportsPage() {
             try {
               const dataUrl = await imageUrlToDataUrl(firstPhotoUrl);
               doc.setFontSize(9);
-              doc.text("Photo:", 14, nextY + 4);
+              doc.text("Photo evidence:", 14, nextY + 4);
               doc.addImage(dataUrl, "JPEG", 14, nextY + 6, 35, 25);
               nextY += 34;
             } catch (error) {
               console.warn("Failed to embed report photo:", error);
               doc.setFontSize(9);
-              const wrapped = doc.splitTextToSize(`Photo URL: ${firstPhotoUrl}`, 180);
+              const wrapped = doc.splitTextToSize(`Photo evidence URL: ${firstPhotoUrl}`, 180);
               doc.text(wrapped, 14, nextY + 4);
               nextY += (wrapped.length * 4) + 2;
             }
+          } else {
+            doc.setFontSize(9);
+            doc.text("Photo evidence: No photo attached", 14, nextY + 4);
+            nextY += 8;
           }
 
           if (nextY > pageHeight - 20) {
@@ -576,8 +596,18 @@ export function ReportsPage() {
         }
       }
 
+      if (nextY + 20 > pageHeight - 12) {
+        doc.addPage();
+        nextY = 14;
+      }
+      doc.setFontSize(13);
+      doc.text("Full Tree-by-tree Compliance Log", 14, nextY + 4);
+      doc.setFontSize(10);
+      const fullLogNote = "The full detailed audit dataset is available through the CSV export. The table below provides a summary view.";
+      doc.text(doc.splitTextToSize(fullLogNote, 182), 14, nextY + 10);
+
       autoTable(doc, {
-        startY: nextY + 4,
+        startY: nextY + 18,
         head: [["Project", "Tree ID", "Botanical Name", "Common Name", "Location", "Required TPM", "Current TPM Status", "Health", "Damage", "Follow-up Actions"]],
         body: records.map((record) => {
           const visit = record.visit_id ? visitById.get(record.visit_id) : undefined;
@@ -586,16 +616,16 @@ export function ReportsPage() {
           const treeKey = projectId && record.tree_id ? `${projectId}:${record.tree_id}` : null;
           const tree = treeKey ? treeByProjectAndTreeId.get(treeKey) : undefined;
           return [
-            project?.name ?? "",
-            tree?.tree_id ?? record.tree_id ?? "",
-            tree?.botanical_name ?? "",
-            tree?.common_name ?? "",
-            tree?.location ?? "",
-            toSemicolon(tree?.required_measures) || tree?.tree_protection_measures || "",
+            project?.name ?? "Not recorded",
+            tree?.tree_id ?? record.tree_id ?? "Not recorded",
+            tree?.botanical_name ?? "Not recorded",
+            tree?.common_name ?? "Not recorded",
+            tree?.location ?? "Not recorded",
+            toSemicolon(tree?.required_measures) || tree?.tree_protection_measures || "Not recorded",
             formatComplianceStatusForCsv(record.tpm_status),
-            record.health ?? "",
-            record.damage ?? "",
-            record.follow_up_actions ?? "",
+            record.health ?? "Not recorded",
+            record.damage ?? "Not recorded",
+            record.follow_up_actions ?? "Not recorded",
           ];
         }),
         styles: { fontSize: 8 },
@@ -658,7 +688,7 @@ export function ReportsPage() {
           {[
             { icon: ClipboardCheck, label: "Total Visits",      value: totalVisits,   color: "#1B4332",  bg: "#F0FDF4" },
             { icon: Shield,         label: "Avg Compliance",    value: `${avgCompliance}%`, color: pctColor(avgCompliance), bg: pctBg(avgCompliance) },
-            { icon: AlertCircle,    label: "Total Breaches",    value: totalBreaches, color: totalBreaches > 0 ? "#DC2626" : "#15803D", bg: totalBreaches > 0 ? "#FEF2F2" : "#F0FDF4" },
+            { icon: AlertCircle,    label: "Total Issues",      value: totalIssues, color: totalIssues > 0 ? "#DC2626" : "#15803D", bg: totalIssues > 0 ? "#FEF2F2" : "#F0FDF4" },
             { icon: Trees,          label: "Trees Inspected",   value: treesInspected, color: "#1D4ED8", bg: "#EFF6FF" },
           ].map(({ icon: Icon, label, value, color, bg }) => (
             <div key={label} className="rounded-2xl p-4"
