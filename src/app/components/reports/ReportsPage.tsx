@@ -309,7 +309,6 @@ export function ReportsPage() {
     setExportErrorMessage(null);
     setExportingCsv(true);
     try {
-      let projectsQuery = supabase.from("projects").select("id, name, slug, site_address, address");
       let visitsQuery = supabase
         .from("visits")
         .select("id, project_id, visit_date, inspection_date, visit_type, inspector_name, inspector, status, created_at")
@@ -323,24 +322,23 @@ export function ReportsPage() {
         .select("id, project_id, visit_id, tree_id, tpm_status, health, structure, damage, notes, follow_up_actions, photo_urls, created_at, updated_at");
 
       if (selectedProjectId) {
-        projectsQuery = projectsQuery.eq("id", selectedProjectId);
         visitsQuery = visitsQuery.eq("project_id", selectedProjectId);
         treesQuery = treesQuery.eq("project_id", selectedProjectId);
         recordsQuery = recordsQuery.eq("project_id", selectedProjectId);
       }
 
-      const [projectsRes, visitsRes, treesRes, recordsRes] = await Promise.all([
-        projectsQuery,
+      const [visitsRes, treesRes, recordsRes] = await Promise.all([
         visitsQuery,
         treesQuery,
         recordsQuery,
       ]);
-      if (projectsRes.error) throw projectsRes.error;
       if (visitsRes.error) throw visitsRes.error;
       if (treesRes.error) throw treesRes.error;
       if (recordsRes.error) throw recordsRes.error;
 
-      const exportProjects = (projectsRes.data ?? []) as ProjectTabRow[];
+      const exportProjects = selectedProjectId
+        ? projects.filter((project) => project.id === selectedProjectId)
+        : projects;
       const exportVisits = (visitsRes.data ?? []) as VisitRow[];
       const exportTrees = (treesRes.data ?? []) as TreeRow[];
       const exportRecords = (recordsRes.data ?? []) as TreeVisitRecordRow[];
@@ -360,7 +358,7 @@ export function ReportsPage() {
         const tree = record.tree_id ? treeById.get(record.tree_id) : undefined;
         return {
           project_name: project?.name ?? "",
-          project_address: project?.site_address ?? project?.address ?? "",
+          project_address: project?.site_address ?? "",
           visit_date: visit?.visit_date ?? visit?.inspection_date ?? "",
           visit_type: visit?.visit_type ?? "",
           inspector_name: visit?.inspector_name ?? visit?.inspector ?? "",
