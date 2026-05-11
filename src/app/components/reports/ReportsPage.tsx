@@ -40,8 +40,11 @@ type VisitRow = {
   id: string;
   project_id: string | null;
   inspection_date: string | null;
+  visit_date?: string | null;
   visit_type: string | null;
   inspector_name: string | null;
+  inspector?: string | null;
+  status?: string | null;
   created_at: string | null;
 };
 
@@ -66,6 +69,7 @@ type ProjectTabRow = {
   name: string;
   slug: string | null;
   site_address?: string | null;
+  client_name?: string | null;
   address?: string | null;
 };
 
@@ -123,6 +127,8 @@ export function ReportsPage() {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [loadingData, setLoadingData] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [exportErrorMessage, setExportErrorMessage] = useState<string | null>(null);
+  const [exportingCsv, setExportingCsv] = useState(false);
   const [visits, setVisits] = useState<VisitRow[]>([]);
   const [records, setRecords] = useState<TreeVisitRecordRow[]>([]);
   const [trees, setTrees] = useState<TreeRow[]>([]);
@@ -135,10 +141,13 @@ export function ReportsPage() {
       try {
         const { data, error } = await supabase
           .from("projects")
-          .select("id, name, slug, site_address, address")
+          .select("id, slug, name, site_address, client_name")
           .order("name", { ascending: true });
 
-        if (error) throw error;
+        if (error) {
+          console.error("[ReportsPage] projectsError:", error);
+          throw error;
+        }
         if (!mounted) return;
 
         const typedProjects = (data ?? []) as ProjectTabRow[];
@@ -182,7 +191,10 @@ export function ReportsPage() {
         }
 
         const { data: visitsData, error: visitsError } = await visitsQuery;
-        if (visitsError) throw visitsError;
+        if (visitsError) {
+          console.error("[ReportsPage] visitsError:", visitsError);
+          throw visitsError;
+        }
 
         let recordsQuery = supabase
           .from("tree_visit_records")
@@ -193,7 +205,10 @@ export function ReportsPage() {
         }
 
         const { data: recordsData, error: recordsError } = await recordsQuery;
-        if (recordsError) throw recordsError;
+        if (recordsError) {
+          console.error("[ReportsPage] treeVisitRecordsError:", recordsError);
+          throw recordsError;
+        }
 
         let treesQuery = supabase
           .from("trees")
@@ -204,7 +219,10 @@ export function ReportsPage() {
         }
 
         const { data: treesData, error: treesError } = await treesQuery;
-        if (treesError) throw treesError;
+        if (treesError) {
+          console.error("[ReportsPage] treesError:", treesError);
+          throw treesError;
+        }
 
         if (!mounted) return;
         const typedVisits = (visitsData ?? []) as VisitRow[];
@@ -287,36 +305,66 @@ export function ReportsPage() {
     return Object.entries(counts).sort((a, b) => b[1] - a[1]);
   }, [visits]);
 
-  const handleExportCsv = () => {
-    const projectById = new Map(projects.map((p) => [p.id, p]));
-    const treeByVisitAndTree = new Map<string, TreeRow>();
-    const treeByTreeOnly = new Map<string, TreeRow>();
-    trees.forEach((tree) => {
-      treeByTreeOnly.set(tree.id, tree);
-      if (tree.tree_id) treeByTreeOnly.set(tree.tree_id, tree);
-    });
-    visits.forEach((visit) => {
-      const visitRecords = recordsByVisitId.get(visit.id) ?? [];
-      visitRecords.forEach((record) => {
-        const key = `${visit.id}::${record.tree_id ?? ""}`;
-        const tree = (record.tree_id && treeByTreeOnly.get(record.tree_id)) || undefined;
-        if (tree) treeByVisitAndTree.set(key, tree);
-      });
-    });
+  const handleExportCsv = async () => {
+    setExportErrorMessage(null);
+    setExportingCsv(true);
+    try {
+      let projectsQuery = supabase.from("projects").select("id, name, slug, site_address, address");
+      let visitsQuery = supabase
+        .from("visits")
+        .select("id, project_id, visit_date, inspection_date, visit_type, inspector_name, inspector, status, created_at")
+        .order("inspection_date", { ascending: false })
+        .order("created_at", { ascending: false });
+      let treesQuery = supabase
+        .from("trees")
+        .select("id, project_id, tree_id, botanical_name, common_name, location, retention_status, tree_protection_measures, required_measures, health, structure, nrz_radius_m, srz_radius_m, nrz_encroachment, encroachment_class");
+      let recordsQuery = supabase
+        .from("tree_visit_records")
+        .select("id, project_id, visit_id, tree_id, tpm_status, health, structure, damage, notes, follow_up_actions, photo_urls, created_at, updated_at");
 
-    const rows: CsvRow[] = [];
-    visits.forEach((visit) => {
-      const visitRecords = recordsByVisitId.get(visit.id) ?? [];
-      visitRecords.forEach((record) => {
-        const project = visit.project_id ? projectById.get(visit.project_id) : undefined;
-        const tree = treeByVisitAndTree.get(`${visit.id}::${record.tree_id ?? ""}`) || (record.tree_id ? treeByTreeOnly.get(record.tree_id) : undefined);
-        rows.push({
+      if (selectedProjectId) {
+        projectsQuery = projectsQuery.eq("id", selectedProjectId);
+        visitsQuery = visitsQuery.eq("project_id", selectedProjectId);
+        treesQuery = treesQuery.eq("project_id", selectedProjectId);
+        recordsQuery = recordsQuery.eq("project_id", selectedProjectId);
+      }
+
+      const [projectsRes, visitsRes, treesRes, recordsRes] = await Promise.all([
+        projectsQuery,
+        visitsQuery,
+        treesQuery,
+        recordsQuery,
+      ]);
+      if (projectsRes.error) throw projectsRes.error;
+      if (visitsRes.error) throw visitsRes.error;
+      if (treesRes.error) throw treesRes.error;
+      if (recordsRes.error) throw recordsRes.error;
+
+      const exportProjects = (projectsRes.data ?? []) as ProjectTabRow[];
+      const exportVisits = (visitsRes.data ?? []) as VisitRow[];
+      const exportTrees = (treesRes.data ?? []) as TreeRow[];
+      const exportRecords = (recordsRes.data ?? []) as TreeVisitRecordRow[];
+
+      const projectById = new Map(exportProjects.map((project) => [project.id, project]));
+      const visitById = new Map(exportVisits.map((visit) => [visit.id, visit]));
+      const treeById = new Map<string, TreeRow>();
+      exportTrees.forEach((tree) => {
+        treeById.set(tree.id, tree);
+        if (tree.tree_id) treeById.set(tree.tree_id, tree);
+      });
+
+      const rows: CsvRow[] = exportRecords.map((record) => {
+        const visit = record.visit_id ? visitById.get(record.visit_id) : undefined;
+        const projectId = visit?.project_id ?? record.project_id ?? null;
+        const project = projectId ? projectById.get(projectId) : undefined;
+        const tree = record.tree_id ? treeById.get(record.tree_id) : undefined;
+        return {
           project_name: project?.name ?? "",
           project_address: project?.site_address ?? project?.address ?? "",
-          visit_date: visit.inspection_date ?? "",
-          visit_type: visit.visit_type ?? "",
-          inspector_name: visit.inspector_name ?? "",
-          visit_status: "",
+          visit_date: visit?.visit_date ?? visit?.inspection_date ?? "",
+          visit_type: visit?.visit_type ?? "",
+          inspector_name: visit?.inspector_name ?? visit?.inspector ?? "",
+          visit_status: visit?.status ?? "",
           tree_id: tree?.tree_id ?? record.tree_id ?? "",
           botanical_name: tree?.botanical_name ?? "",
           common_name: tree?.common_name ?? "",
@@ -335,29 +383,30 @@ export function ReportsPage() {
           nrz_radius_m: tree?.nrz_radius_m ?? "",
           srz_radius_m: tree?.srz_radius_m ?? "",
           encroachment: tree?.nrz_encroachment ?? tree?.encroachment_class ?? "",
-          created_at: record.created_at ?? visit.created_at ?? "",
+          created_at: record.created_at ?? "",
           updated_at: record.updated_at ?? "",
-        });
+        };
       });
-    });
 
-    const header = CSV_COLUMNS.join(",");
-    const body = rows
-      .map((row) => CSV_COLUMNS.map((column) => toCsvCell(row[column])).join(","))
-      .join("\n");
-    const csv = `${header}\n${body}`;
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    const selectedProject = selectedProjectId ? projects.find((project) => project.id === selectedProjectId) : null;
-    link.href = url;
-    link.download = selectedProject?.slug
-      ? `${selectedProject.slug}_compliance_log.csv`
-      : "all_projects_compliance_log.csv";
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+      const header = CSV_COLUMNS.join(",");
+      const body = rows.map((row) => CSV_COLUMNS.map((column) => toCsvCell(row[column])).join(",")).join("\n");
+      const csv = `${header}\n${body}`;
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const selectedProject = selectedProjectId ? exportProjects.find((project) => project.id === selectedProjectId) : null;
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = selectedProject?.slug ? `${selectedProject.slug}_compliance_log.csv` : "all_projects_compliance_log.csv";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error("Failed to export CSV:", error);
+      setExportErrorMessage("Failed to export CSV. Please try again.");
+    } finally {
+      setExportingCsv(false);
+    }
   };
 
   return (
@@ -563,8 +612,8 @@ export function ReportsPage() {
               key={label}
               className="w-full flex items-center gap-3.5 px-4 py-4 text-left transition-colors"
               style={{ borderBottom: "1px solid #F9FAFB" }}
-              onClick={label === "Export CSV — Full Log" ? handleExportCsv : undefined}
-              disabled={label !== "Export CSV — Full Log"}
+              onClick={label === "Export CSV — Full Log" ? () => { void handleExportCsv(); } : undefined}
+              disabled={label !== "Export CSV — Full Log" || exportingCsv}
               title={label === "Export CSV — Full Log" ? "Export CSV" : "Coming soon"}
             >
               <div className="rounded-xl flex items-center justify-center flex-shrink-0"
@@ -573,12 +622,18 @@ export function ReportsPage() {
               </div>
               <div className="flex-1 min-w-0">
                 <p style={{ color: "#111827", fontSize: "0.82rem", fontWeight: 600 }}>{label}</p>
-                <p style={{ color: "#9CA3AF", fontSize: "0.68rem", marginTop: 1 }}>{label === "Export CSV — Full Log" ? sub : `${sub} · Coming soon`}</p>
+                <p style={{ color: "#9CA3AF", fontSize: "0.68rem", marginTop: 1 }}>{label === "Export CSV — Full Log" ? (exportingCsv ? "Exporting CSV..." : sub) : `${sub} · Coming soon`}</p>
               </div>
               <ChevronRight size={14} color="#D1D5DB" style={{ flexShrink: 0 }} />
             </button>
           ))}
         </div>
+
+        {exportErrorMessage && (
+          <div className="rounded-2xl p-4" style={{ background: "#FEF2F2", border: "1px solid #FECACA" }}>
+            <p style={{ color: "#B91C1C", fontSize: "0.78rem", fontWeight: 600 }}>{exportErrorMessage}</p>
+          </div>
+        )}
 
         <div className="rounded-2xl overflow-hidden"
           style={{ background: "white", boxShadow: "0 1px 6px rgba(0,0,0,0.06)", border: "1px solid #FEE2E2" }}>
