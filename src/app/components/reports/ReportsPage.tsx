@@ -39,12 +39,11 @@ type NormalizedStatus = "compliant" | "not_compliant" | "breach" | null;
 type VisitRow = {
   id: string;
   project_id: string | null;
+  tree_id?: string | null;
   inspection_date: string | null;
-  visit_date?: string | null;
   visit_type: string | null;
   inspector_name: string | null;
-  inspector?: string | null;
-  status?: string | null;
+  notes?: string | null;
   created_at: string | null;
 };
 
@@ -55,13 +54,11 @@ type TreeVisitRecordRow = {
   tree_id: string | null;
   tpm_status: string | null;
   health?: string | null;
-  structure?: string | null;
   damage?: string | null;
   notes?: string | null;
   follow_up_actions?: string | null;
   photo_urls?: string[] | null;
   created_at?: string | null;
-  updated_at?: string | null;
 };
 
 type ProjectTabRow = {
@@ -70,7 +67,6 @@ type ProjectTabRow = {
   slug: string | null;
   site_address?: string | null;
   client_name?: string | null;
-  address?: string | null;
 };
 
 type TreeRow = {
@@ -84,11 +80,14 @@ type TreeRow = {
   tree_protection_measures?: string | null;
   required_measures?: string[] | null;
   health?: string | null;
-  structure?: string | null;
   nrz_radius_m?: number | null;
   srz_radius_m?: number | null;
   nrz_encroachment?: string | null;
+  srz_encroachment?: string | null;
   encroachment_class?: string | null;
+  encroachment_parts?: string[] | null;
+  current_status?: string | null;
+  updated_at?: string | null;
 };
 
 type CsvRow = Record<string, string | number | null | undefined>;
@@ -182,7 +181,7 @@ export function ReportsPage() {
       try {
         let visitsQuery = supabase
           .from("visits")
-          .select("id, project_id, inspection_date, visit_type, inspector_name, created_at")
+          .select("id, project_id, tree_id, visit_type, inspection_date, inspector_name, notes, created_at")
           .order("inspection_date", { ascending: false })
           .order("created_at", { ascending: false });
 
@@ -198,7 +197,7 @@ export function ReportsPage() {
 
         let recordsQuery = supabase
           .from("tree_visit_records")
-          .select("id, project_id, visit_id, tree_id, tpm_status, health, structure, damage, notes, follow_up_actions, photo_urls, created_at, updated_at");
+          .select("id, visit_id, project_id, tree_id, tpm_status, health, damage, notes, created_at, photo_urls, follow_up_actions");
 
         if (selectedProjectId) {
           recordsQuery = recordsQuery.eq("project_id", selectedProjectId);
@@ -206,13 +205,13 @@ export function ReportsPage() {
 
         const { data: recordsData, error: recordsError } = await recordsQuery;
         if (recordsError) {
-          console.error("[ReportsPage] treeVisitRecordsError:", recordsError);
+          console.error("[ReportsPage] recordsError:", recordsError);
           throw recordsError;
         }
 
         let treesQuery = supabase
           .from("trees")
-          .select("id, project_id, tree_id, botanical_name, common_name, location, retention_status, tree_protection_measures, required_measures, health, structure, nrz_radius_m, srz_radius_m, nrz_encroachment, encroachment_class");
+          .select("id, project_id, tree_id, botanical_name, common_name, location, retention_status, tree_protection_measures, required_measures, health, structure, nrz_radius_m, srz_radius_m, nrz_encroachment, srz_encroachment, encroachment_class, encroachment_parts, current_status, updated_at");
 
         if (selectedProjectId) {
           treesQuery = treesQuery.eq("project_id", selectedProjectId);
@@ -311,15 +310,15 @@ export function ReportsPage() {
     try {
       let visitsQuery = supabase
         .from("visits")
-        .select("id, project_id, visit_date, inspection_date, visit_type, inspector_name, inspector, status, created_at")
+        .select("id, project_id, tree_id, visit_type, inspection_date, inspector_name, notes, created_at")
         .order("inspection_date", { ascending: false })
         .order("created_at", { ascending: false });
       let treesQuery = supabase
         .from("trees")
-        .select("id, project_id, tree_id, botanical_name, common_name, location, retention_status, tree_protection_measures, required_measures, health, structure, nrz_radius_m, srz_radius_m, nrz_encroachment, encroachment_class");
+        .select("id, project_id, tree_id, botanical_name, common_name, location, retention_status, tree_protection_measures, required_measures, health, structure, nrz_radius_m, srz_radius_m, nrz_encroachment, srz_encroachment, encroachment_class, encroachment_parts, current_status, updated_at");
       let recordsQuery = supabase
         .from("tree_visit_records")
-        .select("id, project_id, visit_id, tree_id, tpm_status, health, structure, damage, notes, follow_up_actions, photo_urls, created_at, updated_at");
+        .select("id, visit_id, project_id, tree_id, tpm_status, health, damage, notes, created_at, photo_urls, follow_up_actions");
 
       if (selectedProjectId) {
         visitsQuery = visitsQuery.eq("project_id", selectedProjectId);
@@ -359,10 +358,10 @@ export function ReportsPage() {
         return {
           project_name: project?.name ?? "",
           project_address: project?.site_address ?? "",
-          visit_date: visit?.visit_date ?? visit?.inspection_date ?? "",
+          visit_date: visit?.inspection_date ?? "",
           visit_type: visit?.visit_type ?? "",
-          inspector_name: visit?.inspector_name ?? visit?.inspector ?? "",
-          visit_status: visit?.status ?? "",
+          inspector_name: visit?.inspector_name ?? "",
+          visit_status: record.visit_id && recordsByVisitId.get(record.visit_id)?.length ? "Complete" : "Draft",
           tree_id: tree?.tree_id ?? record.tree_id ?? "",
           botanical_name: tree?.botanical_name ?? "",
           common_name: tree?.common_name ?? "",
@@ -372,7 +371,7 @@ export function ReportsPage() {
           initial_health: tree?.health ?? "",
           initial_structure: tree?.structure ?? "",
           current_health: record.health ?? "",
-          current_structure: record.structure ?? "",
+          current_structure: "",
           compliance_status: record.tpm_status ?? "",
           tree_damage: record.damage ?? "",
           notes: record.notes ?? "",
@@ -380,9 +379,9 @@ export function ReportsPage() {
           photo_urls: toSemicolon(record.photo_urls),
           nrz_radius_m: tree?.nrz_radius_m ?? "",
           srz_radius_m: tree?.srz_radius_m ?? "",
-          encroachment: tree?.nrz_encroachment ?? tree?.encroachment_class ?? "",
+          encroachment: tree?.nrz_encroachment ?? tree?.srz_encroachment ?? tree?.encroachment_class ?? toSemicolon(tree?.encroachment_parts) ?? "",
           created_at: record.created_at ?? "",
-          updated_at: record.updated_at ?? "",
+          updated_at: tree?.updated_at ?? record.created_at ?? "",
         };
       });
 
