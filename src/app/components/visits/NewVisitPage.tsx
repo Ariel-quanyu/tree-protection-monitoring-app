@@ -563,7 +563,7 @@ export function NewVisitPage() {
 
   const [step,        setStep]        = useState<Step>(1);
   const [visitType,   setVisitType]   = useState<VisitType | "">("Routine Visit");
-  const [inspector,   setInspector]   = useState(project?.inspector ?? "");
+  const [inspector,   setInspector]   = useState(() => fullName.trim() || "Site Arborist");
   const [date,        setDate]        = useState(new Date().toISOString().split("T")[0]);
   const [visitNotes,  setVisitNotes]  = useState("");
   const [records,     setRecords]     = useState<TreeRecord[]>([]);
@@ -572,10 +572,7 @@ export function NewVisitPage() {
   const [submitError, setSubmitError] = useState("");
 
   useEffect(() => {
-    const preferredInspector = fullName.trim();
-    if (preferredInspector) {
-      setInspector((current) => current.trim() ? current : preferredInspector);
-    }
+    setInspector(fullName.trim() || "Site Arborist");
   }, [fullName]);
 
   // Fetch trees when project/step changes
@@ -655,7 +652,7 @@ export function NewVisitPage() {
               return data.id;
             });
 
-      const inspectorName = fullName.trim() || inspector.trim();
+      const inspectorName = inspector.trim() || "Site Arborist";
       const payload = {
         project_id: projectUuid,
         tree_id: null,
