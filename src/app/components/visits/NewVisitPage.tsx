@@ -558,12 +558,12 @@ function ReviewStep({
 export function NewVisitPage() {
   const navigate = useNavigate();
   const { projects, selectedProjectId } = useProject();
-  const { user, profile } = useAuth();
+  const { fullName } = useAuth();
   const project = projects.find(p => p.id === selectedProjectId) ?? projects[0];
 
   const [step,        setStep]        = useState<Step>(1);
   const [visitType,   setVisitType]   = useState<VisitType | "">("Routine Visit");
-  const [inspector,   setInspector]   = useState(project?.inspector ?? "");
+  const [inspector,   setInspector]   = useState(() => fullName.trim() || "Site Arborist");
   const [date,        setDate]        = useState(new Date().toISOString().split("T")[0]);
   const [visitNotes,  setVisitNotes]  = useState("");
   const [records,     setRecords]     = useState<TreeRecord[]>([]);
@@ -572,11 +572,8 @@ export function NewVisitPage() {
   const [submitError, setSubmitError] = useState("");
 
   useEffect(() => {
-    const preferredInspector = profile?.full_name?.trim() || user?.email || "";
-    if (preferredInspector) {
-      setInspector((current) => current.trim() ? current : preferredInspector);
-    }
-  }, [profile?.full_name, user?.email]);
+    setInspector(fullName.trim() || "Site Arborist");
+  }, [fullName]);
 
   // Fetch trees when project/step changes
   useEffect(() => {
@@ -629,11 +626,6 @@ export function NewVisitPage() {
       console.error("Failed to save visit:", message);
       return;
     }
-    if (!user?.id) {
-      setSubmitError("You must be logged in to create a visit.");
-      return;
-    }
-
     console.info("Submitting visit payload", {
       projectId: project.id,
       date,
@@ -660,14 +652,13 @@ export function NewVisitPage() {
               return data.id;
             });
 
-      const inspectorName = profile?.full_name?.trim() || user.email || inspector.trim();
+      const inspectorName = inspector.trim() || "Site Arborist";
       const payload = {
         project_id: projectUuid,
         tree_id: null,
         visit_type: visitType,
         inspection_date: date,
         inspector_name: inspectorName,
-        created_by: user.id,
         notes: visitNotes.trim(),
       };
       console.log("site visit insert payload", payload);
@@ -726,8 +717,7 @@ export function NewVisitPage() {
             damage: record.damage || null,
             notes: record.notes.trim() || null,
             photo_urls: photoUrls.length > 0 ? photoUrls : null,
-            created_by: user.id,
-          };
+              };
         })
       );
 

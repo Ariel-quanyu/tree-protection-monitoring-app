@@ -1,85 +1,38 @@
-import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
-import type { Session, User } from "@supabase/supabase-js";
-import { supabase } from "../../lib/supabase";
+import React, { createContext, useContext, useMemo, useState } from "react";
 
-interface Profile {
-  id: string;
-  full_name: string | null;
-  role: string | null;
-  created_at: string | null;
-}
+const FULL_NAME_STORAGE_KEY = "inspector_full_name";
 
 interface AuthContextValue {
-  user: User | null;
-  profile: Profile | null;
+  fullName: string;
   loading: boolean;
-  signInWithEmail: (email: string) => Promise<void>;
-  signOut: () => Promise<void>;
+  setFullName: (name: string) => void;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
-async function fetchProfile(userId: string): Promise<Profile | null> {
-  const { data, error } = await supabase
-    .from("profiles")
-    .select("id, full_name, role, created_at")
-    .eq("id", userId)
-    .maybeSingle();
-
-  if (error) throw error;
-  return data;
+function getStoredFullName(): string {
+  if (typeof window === "undefined") return "";
+  return localStorage.getItem(FULL_NAME_STORAGE_KEY)?.trim() ?? "";
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [session, setSession] = useState<Session | null>(null);
-  const [profile, setProfile] = useState<Profile | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [fullName, setFullNameState] = useState<string>(() => getStoredFullName());
 
-  useEffect(() => {
-    supabase.auth.getSession().then(async ({ data }) => {
-      setSession(data.session);
-      if (data.session?.user?.id) {
-        try {
-          setProfile(await fetchProfile(data.session.user.id));
-        } catch (error) {
-          console.error("Failed to load profile:", error);
-          setProfile(null);
-        }
-      }
-      setLoading(false);
-    });
-
-    const { data: authListener } = supabase.auth.onAuthStateChange(async (_event, nextSession) => {
-      setSession(nextSession);
-      if (nextSession?.user?.id) {
-        try {
-          setProfile(await fetchProfile(nextSession.user.id));
-        } catch (error) {
-          console.error("Failed to load profile:", error);
-          setProfile(null);
-        }
-      } else {
-        setProfile(null);
-      }
-      setLoading(false);
-    });
-
-    return () => authListener.subscription.unsubscribe();
-  }, []);
+  const setFullName = (name: string) => {
+    const normalized = name.trim();
+    setFullNameState(normalized);
+    if (normalized) {
+      localStorage.setItem(FULL_NAME_STORAGE_KEY, normalized);
+    } else {
+      localStorage.removeItem(FULL_NAME_STORAGE_KEY);
+    }
+  };
 
   const value = useMemo<AuthContextValue>(() => ({
-    user: session?.user ?? null,
-    profile,
-    loading,
-    signInWithEmail: async (email: string) => {
-      const { error } = await supabase.auth.signInWithOtp({ email });
-      if (error) throw error;
-    },
-    signOut: async () => {
-      const { error } = await supabase.auth.signOut();
-      if (error) throw error;
-    },
-  }), [loading, profile, session?.user]);
+    fullName,
+    loading: false,
+    setFullName,
+  }), [fullName]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
