@@ -9,6 +9,7 @@ import {
   Plus,
 } from "lucide-react";
 import { ProjectProvider } from "../context/ProjectContext";
+import { AuthProvider, useAuth } from "../context/AuthContext";
 
 const NAV_ITEMS = [
   { path: "/projects", label: "Projects",  icon: FolderOpen     },
@@ -24,16 +25,70 @@ const FAB_HIDDEN_PATHS = [
 ];
 
 export function Layout() {
+  return (
+    <AuthProvider>
+      <LayoutContent />
+    </AuthProvider>
+  );
+}
+
+function LayoutContent() {
   const navigate  = useNavigate();
   const location  = useLocation();
+  const { user, loading, signInWithEmail, signOut, profile } = useAuth();
+  const [email, setEmail] = React.useState("");
+  const [message, setMessage] = React.useState("");
+  const [authError, setAuthError] = React.useState("");
 
   const isActive = (path: string) => location.pathname.startsWith(path);
 
   const showFab = !FAB_HIDDEN_PATHS.some(p => location.pathname.startsWith(p));
 
+  const handleLogin = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setAuthError("");
+    setMessage("");
+    try {
+      await signInWithEmail(email.trim());
+      setMessage("Magic link sent. Check your email to sign in.");
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : "Failed to sign in.");
+    }
+  };
+
+  if (loading) {
+    return <div className="min-h-screen grid place-items-center text-sm text-gray-500">Loading…</div>;
+  }
+
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-[#F2F5F2] grid place-items-center px-6">
+        <form onSubmit={handleLogin} className="w-full max-w-sm bg-white rounded-2xl shadow p-5 space-y-3">
+          <h1 className="text-lg font-semibold text-[#1B4332]">Arborist sign in</h1>
+          <p className="text-sm text-gray-600">Use your work email to receive a login link.</p>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className="w-full rounded-lg border px-3 py-2 text-sm"
+            placeholder="name@company.com"
+            required
+          />
+          <button type="submit" className="w-full rounded-lg bg-[#2D5A27] text-white py-2 text-sm font-medium">Email login link</button>
+          {message && <p className="text-xs text-green-700">{message}</p>}
+          {authError && <p className="text-xs text-red-600">{authError}</p>}
+        </form>
+      </div>
+    );
+  }
+
   return (
     <ProjectProvider>
       <div className="flex flex-col min-h-screen bg-[#F2F5F2] max-w-md mx-auto relative">
+        <div className="px-4 pt-2 text-[11px] text-gray-600 bg-white border-b flex items-center justify-between">
+          <span>{profile?.full_name || user.email}</span>
+          <button onClick={() => void signOut()} className="text-[#1B4332] py-1">Logout</button>
+        </div>
         {/* Scrollable content area */}
         <div className="flex-1 overflow-y-auto pb-24">
           <Outlet />

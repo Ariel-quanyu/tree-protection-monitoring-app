@@ -11,6 +11,7 @@ import {
 import { useProject } from "../../context/ProjectContext";
 import { supabase } from "../../../lib/supabase";
 import { mapSupabaseTree, type SupabaseTree } from "../../data/treeMapper";
+import { useAuth } from "../../context/AuthContext";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -557,6 +558,7 @@ function ReviewStep({
 export function NewVisitPage() {
   const navigate = useNavigate();
   const { projects, selectedProjectId } = useProject();
+  const { user, profile } = useAuth();
   const project = projects.find(p => p.id === selectedProjectId) ?? projects[0];
 
   const [step,        setStep]        = useState<Step>(1);
@@ -568,6 +570,13 @@ export function NewVisitPage() {
   const [loadingTrees, setLoadingTrees] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [submitError, setSubmitError] = useState("");
+
+  useEffect(() => {
+    const preferredInspector = profile?.full_name?.trim() || user?.email || "";
+    if (preferredInspector) {
+      setInspector((current) => current.trim() ? current : preferredInspector);
+    }
+  }, [profile?.full_name, user?.email]);
 
   // Fetch trees when project/step changes
   useEffect(() => {
@@ -609,7 +618,7 @@ export function NewVisitPage() {
 
   const inspectedCount  = records.filter(r => !r.noChange).length;
   const breachCount     = records.filter(r => !r.noChange && (r.tpmStatus === "not_compliant" || r.tpmStatus === "breach")).length;
-  const canNext1 = visitType !== "" && inspector.trim() !== "" && date !== "";
+  const canNext1 = visitType !== "" && date !== "";
 
   const handleComplete = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -618,6 +627,10 @@ export function NewVisitPage() {
       const message = "No project selected. Please choose a project before saving.";
       setSubmitError(message);
       console.error("Failed to save visit:", message);
+      return;
+    }
+    if (!user?.id) {
+      setSubmitError("You must be logged in to create a visit.");
       return;
     }
 
@@ -647,12 +660,14 @@ export function NewVisitPage() {
               return data.id;
             });
 
+      const inspectorName = profile?.full_name?.trim() || user.email || inspector.trim();
       const payload = {
         project_id: projectUuid,
         tree_id: null,
         visit_type: visitType,
         inspection_date: date,
-        inspector_name: inspector.trim(),
+        inspector_name: inspectorName,
+        created_by: user.id,
         notes: visitNotes.trim(),
       };
       console.log("site visit insert payload", payload);
@@ -711,6 +726,7 @@ export function NewVisitPage() {
             damage: record.damage || null,
             notes: record.notes.trim() || null,
             photo_urls: photoUrls.length > 0 ? photoUrls : null,
+            created_by: user.id,
           };
         })
       );
