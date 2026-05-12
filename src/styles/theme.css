@@ -179,3 +179,79 @@
     line-height: 1.5;
   }
 }
+
+
+@media (max-width: 768px) {
+  :root {
+    --font-size: 18px;
+  }
+
+  body {
+    line-height: 1.65;
+    color: oklch(0.12 0 0);
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    background: #eef3ee;
+  }
+
+  [data-slot="card"] {
+    gap: 0.95rem;
+    border-width: 1.5px;
+    border-color: rgba(0, 0, 0, 0.18);
+    background: #ffffff;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+    margin-bottom: 1rem;
+  }
+
+  [data-slot="card-header"],
+  [data-slot="card-content"],
+  [data-slot="card-footer"] {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+
+  [data-slot="card-header"] {
+    padding-top: 1rem;
+  }
+
+  [data-slot="card-footer"],
+  [data-slot="card-content"]:last-child {
+    padding-bottom: 1rem;
+  }
+
+  [data-slot="button"],
+  button,
+  [role="button"] {
+    min-height: 2.9rem;
+  }
+
+  [data-slot="button"] {
+    font-size: 1rem;
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+
+  [data-slot="input"],
+  textarea,
+  select {
+    min-height: 2.9rem;
+    font-size: 1rem;
+    border-width: 1.5px;
+  }
+
+  main,
+  section,
+  form {
+    gap: 0.9rem;
+  }
+
+  p,
+  li,
+  label,
+  input,
+  textarea,
+  select,
+  button {
+    font-size: 1rem;
+  }
+}
