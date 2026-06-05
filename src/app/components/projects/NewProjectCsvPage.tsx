@@ -202,7 +202,7 @@ export function NewProjectCsvPage() {
       navigate(`/projects/${result.project.id}`, { state: { importSuccess: message } });
     } catch (error) {
       console.error("CSV import failed:", error);
-      setFormError("CSV import failed.");
+      setFormError(error instanceof Error ? error.message : "CSV import failed.");
     } finally {
       setSaving(false);
     }
