@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router";
 import {
   MapPin, Trees, AlertCircle, Calendar, ChevronRight,
-  FolderOpen, Bell, BellOff, Clock, AlertTriangle,
+  FolderOpen, Bell, BellOff, Clock, AlertTriangle, Plus,
 } from "lucide-react";
 import { type ProjectData } from "../../data/projectsData";
 import { useProject } from "../../context/ProjectContext";
@@ -266,6 +266,7 @@ function StatTile({ label, value, color = "white", sub }: {
 type Filter = "all" | "active" | "monitoring" | "completed";
 
 export function ProjectsPage() {
+  const navigate = useNavigate();
   const { projects, loadingProjects } = useProject();
   const [filter,      setFilter]      = useState<Filter>("all");
   const [treeCounts,  setTreeCounts]  = useState<Record<string, number>>({});
@@ -356,7 +357,13 @@ export function ProjectsPage() {
             </p>
           </div>
 
-
+          <button
+            onClick={() => navigate("/projects/new")}
+            className="rounded-xl px-3 py-2 flex items-center gap-1.5 active:scale-95 transition-transform"
+            style={{ background: "rgba(255,255,255,0.14)", border: "1px solid rgba(255,255,255,0.18)", color: "white", fontSize: "0.75rem", fontWeight: 800 }}
+          >
+            <Plus size={15} /> New Project
+          </button>
         </div>
 
         {/* ── Project-level summary stats ── */}
