@@ -29,6 +29,7 @@ Without a structured system, this process can become manual, fragmented, and tim
 ## Key Features
 
 - Manage multiple construction projects
+- Create new projects and import tree records from CSV files
 - Store and view tree inventory data
 - Track tree protection compliance status
 - Record inspection visits and observations
@@ -36,7 +37,6 @@ Without a structured system, this process can become manual, fragmented, and tim
 - Connect project and tree data through a live database
 - Prepare structured records for future reporting
 
----
 
 ## Technical Stack
 
@@ -83,24 +83,6 @@ Implemented data flows include:
 - displaying tree-level visit history
 
 This demonstrates practical experience with live database integration, API-based data operations, and relational data modelling.
-
-
-## AI-assisted Development
-
-This project was built using a human-in-the-loop AI development workflow.
-
-AI tools were used to support:
-
-- UI generation from Figma-based prompts
-- React and TypeScript debugging
-- Supabase query troubleshooting
-- front-end and database field alignment
-- code refactoring
-- deployment issue diagnosis
-
-I used AI as a development assistant while making the key decisions around product logic, database structure, workflow design, and business requirements.
-
----
 
 ## My Role
 
