@@ -2,6 +2,7 @@ import { createBrowserRouter, Navigate } from "react-router";
 import { Layout } from "./components/Layout";
 import { ProjectsPage } from "./components/projects/ProjectsPage";
 import { ProjectDetailPage } from "./components/projects/ProjectDetailPage";
+import { NewProjectCsvPage } from "./components/projects/NewProjectCsvPage";
 import { TreesPage } from "./components/trees/TreesPage";
 import { TreeDetailPage } from "./components/trees/TreeDetailPage";
 import { MapPage } from "./components/map/MapPage";
@@ -20,6 +21,7 @@ export const router = createBrowserRouter([
 
       // ── Module 1: Projects ─────────────────────────────────────────────────
       { path: "projects", Component: ProjectsPage },
+      { path: "projects/new", Component: NewProjectCsvPage },
       { path: "projects/:id", Component: ProjectDetailPage },
 
       // ── Module 2: Visits / Inspections ────────────────────────────────────

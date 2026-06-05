@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router";
-import { ChevronLeft, MapPin, Trees } from "lucide-react";
+import { useLocation, useNavigate, useParams } from "react-router";
+import { CheckCircle2, ChevronLeft, MapPin, Trees } from "lucide-react";
 import { useProject } from "../../context/ProjectContext";
 import { type InspectionFrequency } from "../../data/projectsData";
 import { updateProjectInspectionSchedule } from "../../data/projectsApi";
@@ -14,8 +14,18 @@ const STATUS_LABEL: Record<string, string> = {
   completed: "Completed",
 };
 
+type ImportedTreePreview = {
+  id: string;
+  tree_id: string | null;
+  botanical_name: string | null;
+  common_name: string | null;
+  location: string | null;
+  retention_status: string | null;
+};
+
 export function ProjectDetailPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { id } = useParams<{ id: string }>();
   const { projects, loadingProjects, updateProject } = useProject();
 
@@ -25,6 +35,7 @@ export function ProjectDetailPage() {
   );
 
   const [treeCount, setTreeCount] = useState<number | null>(null);
+  const [treePreview, setTreePreview] = useState<ImportedTreePreview[]>([]);
   const [inspectionFrequency, setInspectionFrequency] = useState<InspectionFrequency>("Monthly");
   const [nextInspectionDue, setNextInspectionDue] = useState("");
   const [reminderEnabled, setReminderEnabled] = useState(false);
@@ -45,25 +56,32 @@ export function ProjectDetailPage() {
     if (!project?.uuid) return;
     let cancelled = false;
     setTreeCount(null);
+    setTreePreview([]);
 
     supabase
       .from("trees")
-      .select("id", { count: "exact", head: true })
+      .select("id, tree_id, botanical_name, common_name, location, retention_status", { count: "exact" })
       .eq("project_id", project.uuid)
-      .then(({ count, error }) => {
+      .order("tree_id", { ascending: true })
+      .limit(10)
+      .then(({ data, count, error }) => {
         if (cancelled) return;
         if (error) {
-          console.error("ProjectDetailPage tree count error:", error);
+          console.error("ProjectDetailPage tree load error:", error);
           setTreeCount(0);
+          setTreePreview([]);
           return;
         }
-        setTreeCount(count ?? 0);
+        setTreeCount(count ?? data?.length ?? 0);
+        setTreePreview((data ?? []) as ImportedTreePreview[]);
       });
 
     return () => {
       cancelled = true;
     };
   }, [project?.uuid]);
+
+  const importSuccess = (location.state as { importSuccess?: string } | null)?.importSuccess;
 
   const handleSaveSchedule = async () => {
     if (!project) return;
@@ -125,6 +143,13 @@ export function ProjectDetailPage() {
       </div>
 
       <div className="px-4 mt-4 flex flex-col gap-3">
+        {importSuccess && (
+          <div className="rounded-2xl px-4 py-3 flex items-start gap-2" style={{ background: "#F0FDF4", border: "1px solid #BBF7D0" }}>
+            <CheckCircle2 size={16} color="#16A34A" />
+            <p style={{ color: "#166534", fontSize: "0.78rem", fontWeight: 700 }}>{importSuccess}</p>
+          </div>
+        )}
+
         <div className="rounded-2xl p-4" style={{ background: "white", border: "1px solid #E5E7EB" }}>
           <p style={{ color: "#9CA3AF", fontSize: "0.65rem", textTransform: "uppercase", fontWeight: 700 }}>Site address</p>
           <div className="flex items-start gap-2 mt-2">
@@ -143,6 +168,46 @@ export function ProjectDetailPage() {
               {STATUS_LABEL[project.status] ?? project.status}
             </span>
           </div>
+        </div>
+
+        <div className="rounded-2xl overflow-hidden" style={{ background: "white", border: "1px solid #E5E7EB" }}>
+          <div className="px-4 py-3" style={{ borderBottom: "1px solid #F3F4F6" }}>
+            <p style={{ color: "#111827", fontSize: "0.9rem", fontWeight: 800 }}>Imported trees</p>
+            <p style={{ color: "#6B7280", fontSize: "0.7rem", marginTop: 2 }}>
+              {treeCount === null ? "Loading tree records…" : `Showing ${treePreview.length} of ${treeCount} tree records for this project.`}
+            </p>
+          </div>
+          {treePreview.length === 0 ? (
+            <div className="px-4 py-5 text-center" style={{ color: "#9CA3AF", fontSize: "0.78rem" }}>No trees imported yet.</div>
+          ) : (
+            <div className="divide-y" style={{ borderColor: "#F3F4F6" }}>
+              {treePreview.map((tree) => (
+                <div key={tree.id} className="px-4 py-3 flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p style={{ color: "#111827", fontSize: "0.82rem", fontWeight: 800 }}>Tree {tree.tree_id || "Not recorded"}</p>
+                    <p style={{ color: "#6B7280", fontSize: "0.72rem", marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {tree.botanical_name || tree.common_name || "Species not recorded"}
+                    </p>
+                    {tree.location && <p style={{ color: "#9CA3AF", fontSize: "0.68rem", marginTop: 1 }}>{tree.location}</p>}
+                  </div>
+                  {tree.retention_status && (
+                    <span className="rounded-full px-2 py-0.5 flex-shrink-0" style={{ background: "#F3F4F6", color: "#4B5563", fontSize: "0.66rem", fontWeight: 700 }}>
+                      {tree.retention_status}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          {treePreview.length > 0 && (
+            <button
+              onClick={() => navigate("/trees")}
+              className="w-full py-3 active:bg-gray-50"
+              style={{ color: "#166534", fontSize: "0.78rem", fontWeight: 800, borderTop: "1px solid #F3F4F6" }}
+            >
+              Open full tree register
+            </button>
+          )}
         </div>
 
         <div className="rounded-2xl p-4" style={{ background: "white", border: "1px solid #D1FAE5" }}>
