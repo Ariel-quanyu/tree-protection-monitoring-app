@@ -1,7 +1,13 @@
 import React, { useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { AlertCircle, CheckCircle2, ChevronLeft, FileSpreadsheet, Loader2, Upload, XCircle } from "lucide-react";
-import { createProjectAndImportTrees, type CsvTreeInputRow } from "../../data/csvImportApi";
+import {
+  createProjectAndImportTrees,
+  isImportableTreeCsvColumn,
+  isNumericTreeCsvColumn,
+  normalizeCsvHeader,
+  type CsvTreeInputRow,
+} from "../../data/csvImportApi";
 import { useProject } from "../../context/ProjectContext";
 
 type ParseStatus = "idle" | "ready" | "error";
@@ -12,10 +18,6 @@ interface ParsedCsv {
 }
 
 const PREVIEW_ROW_COUNT = 10;
-
-function normalizeHeader(value: string) {
-  return value.trim().toLowerCase().replace(/^\uFEFF/, "").replace(/\s+/g, "_");
-}
 
 function parseCsvLine(line: string) {
   const values: string[] = [];
@@ -59,7 +61,7 @@ function parseCsv(text: string): ParsedCsv {
 
   if (lines.length === 0) return { headers: [], rows: [] };
 
-  const headers = parseCsvLine(lines[0]).map(normalizeHeader);
+  const headers = parseCsvLine(lines[0]).map(normalizeCsvHeader);
   const rows = lines.slice(1).map((line) => {
     const values = parseCsvLine(line);
     return headers.reduce<CsvTreeInputRow>((row, header, index) => {
@@ -75,10 +77,18 @@ function validateCsv(parsed: ParsedCsv) {
   const errors: string[] = [];
   const treeIdHeader = parsed.headers.find((header) => header === "tree_id");
 
+  if (parsed.headers.length === 0 || parsed.rows.length === 0) {
+    errors.push("CSV must contain a header row and at least one tree row.");
+    return errors;
+  }
+
   if (!treeIdHeader) {
     errors.push("Tree ID column is required.");
     return errors;
   }
+
+  const duplicateHeaders = parsed.headers.filter((header, index) => parsed.headers.indexOf(header) !== index);
+  if (duplicateHeaders.length > 0) errors.push(`Duplicate CSV columns found: ${[...new Set(duplicateHeaders)].join(", ")}.`);
 
   const missingTreeIds = parsed.rows.some((row) => !String(row[treeIdHeader] ?? "").trim());
   if (missingTreeIds) errors.push("Some rows are missing Tree ID.");
@@ -92,6 +102,15 @@ function validateCsv(parsed: ParsedCsv) {
     return false;
   });
   if (duplicate) errors.push("Duplicate Tree IDs found in CSV.");
+
+  const invalidNumericColumns = parsed.headers.filter((header) => {
+    if (!isNumericTreeCsvColumn(header)) return false;
+    return parsed.rows.some((row) => {
+      const value = String(row[header] ?? "").trim();
+      return value !== "" && !Number.isFinite(Number(value));
+    });
+  });
+  if (invalidNumericColumns.length > 0) errors.push(`Numeric columns contain invalid values: ${invalidNumericColumns.join(", ")}.`);
 
   return errors;
 }
@@ -117,8 +136,11 @@ export function NewProjectCsvPage() {
   const [saving, setSaving] = useState(false);
 
   const csvErrors = useMemo(() => validateCsv(parsedCsv), [parsedCsv]);
+  const importableHeaders = useMemo(() => parsedCsv.headers.filter(isImportableTreeCsvColumn), [parsedCsv.headers]);
+  const ignoredHeaders = useMemo(() => parsedCsv.headers.filter((header) => !isImportableTreeCsvColumn(header)), [parsedCsv.headers]);
   const previewRows = parsedCsv.rows.slice(0, PREVIEW_ROW_COUNT);
-  const canSubmit = projectName.trim() && siteAddress.trim() && csvStatus === "ready" && parsedCsv.rows.length > 0 && csvErrors.length === 0 && !saving;
+  const previewHeaders = parsedCsv.headers.slice(0, 8);
+  const canSubmit = Boolean(projectName.trim() && siteAddress.trim() && csvStatus === "ready" && parsedCsv.rows.length > 0 && csvErrors.length === 0 && !saving);
 
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -264,7 +286,16 @@ export function NewProjectCsvPage() {
             <div className="mt-3 flex items-center gap-2">
               {csvErrors.length === 0 ? <CheckCircle2 size={15} color="#16A34A" /> : <XCircle size={15} color="#DC2626" />}
               <span style={{ color: csvErrors.length === 0 ? "#166534" : "#B91C1C", fontSize: "0.74rem", fontWeight: 700 }}>
-                {csvErrors.length === 0 ? `${parsedCsv.rows.length} rows ready to import.` : csvErrors[0]}
+                {csvErrors.length === 0 ? `${parsedCsv.rows.length} rows ready to import (${importableHeaders.length} matching columns).` : csvErrors[0]}
+              </span>
+            </div>
+          )}
+
+          {csvStatus === "ready" && ignoredHeaders.length > 0 && csvErrors.length === 0 && (
+            <div className="mt-2 flex items-center gap-2">
+              <AlertCircle size={14} color="#D97706" />
+              <span style={{ color: "#92400E", fontSize: "0.72rem", fontWeight: 600 }}>
+                Unknown columns will be skipped: {ignoredHeaders.join(", ")}.
               </span>
             </div>
           )}
@@ -287,7 +318,7 @@ export function NewProjectCsvPage() {
               <table className="w-full" style={{ minWidth: 680, borderCollapse: "collapse" }}>
                 <thead>
                   <tr style={{ background: "#F9FAFB" }}>
-                    {parsedCsv.headers.slice(0, 8).map((header) => (
+                    {previewHeaders.map((header) => (
                       <th key={header} className="px-3 py-2 text-left" style={{ color: "#6B7280", fontSize: "0.66rem", textTransform: "uppercase", letterSpacing: "0.06em" }}>
                         {header}
                       </th>
@@ -297,7 +328,7 @@ export function NewProjectCsvPage() {
                 <tbody>
                   {previewRows.map((row, rowIndex) => (
                     <tr key={rowIndex} style={{ borderTop: "1px solid #F3F4F6" }}>
-                      {parsedCsv.headers.slice(0, 8).map((header) => (
+                      {previewHeaders.map((header) => (
                         <td key={header} className="px-3 py-2" style={{ color: "#111827", fontSize: "0.72rem", maxWidth: 160, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                           {String(row[header] ?? "") || "—"}
                         </td>

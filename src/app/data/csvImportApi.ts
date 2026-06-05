@@ -17,21 +17,68 @@ export interface CreateProjectImportResult {
 
 const INSPECTION_FREQUENCY = "Monthly";
 
-const TREE_FIELD_ALIASES: Record<string, string> = {
-  tree_id: "tree_id",
-  botanical_name: "botanical_name",
-  common_name: "common_name",
-  location: "location",
-  retention_status: "retention_status",
-  tree_protection_measures: "tree_protection_measures",
-  required_measures: "required_measures",
-  health: "health",
-  structure: "structure",
-  srz: "srz_radius_m",
-  srz_radius_m: "srz_radius_m",
-  tpz: "nrz_radius_m",
-  nrz_radius_m: "nrz_radius_m",
-};
+const TEXT_TREE_FIELDS = [
+  "tree_id",
+  "location",
+  "botanical_name",
+  "common_name",
+  "health",
+  "structure",
+  "observations",
+  "retention_status",
+  "nrz_encroachment",
+  "srz_encroachment",
+  "encroachment_class",
+  "encroachment_parts",
+  "current_status",
+  "origin",
+  "age",
+  "ule",
+  "retention_value",
+  "tree_protection_measures",
+] as const;
+
+const NUMERIC_TREE_FIELDS = [
+  "latitude",
+  "longitude",
+  "nrz_radius_m",
+  "srz_radius_m",
+  "dbh_cm",
+  "dab_cm",
+  "height_m",
+  "spread_m",
+] as const;
+
+const ARRAY_TREE_FIELDS = ["required_measures"] as const;
+
+type TextTreeField = typeof TEXT_TREE_FIELDS[number];
+type NumericTreeField = typeof NUMERIC_TREE_FIELDS[number];
+type ArrayTreeField = typeof ARRAY_TREE_FIELDS[number];
+type ImportableTreeField = TextTreeField | NumericTreeField | ArrayTreeField;
+
+const IMPORTABLE_TREE_FIELDS = new Set<string>([
+  ...TEXT_TREE_FIELDS,
+  ...NUMERIC_TREE_FIELDS,
+  ...ARRAY_TREE_FIELDS,
+]);
+
+const NUMERIC_TREE_FIELD_SET = new Set<string>(NUMERIC_TREE_FIELDS);
+
+const TREE_FIELD_ALIASES = Object.fromEntries(
+  [...IMPORTABLE_TREE_FIELDS].map((field) => [field, field])
+) as Record<string, ImportableTreeField>;
+
+export function normalizeCsvHeader(value: string) {
+  return value.trim().toLowerCase().replace(/^\uFEFF/, "").replace(/\s+/g, "_");
+}
+
+export function isImportableTreeCsvColumn(value: string) {
+  return IMPORTABLE_TREE_FIELDS.has(normalizeCsvHeader(value));
+}
+
+export function isNumericTreeCsvColumn(value: string) {
+  return NUMERIC_TREE_FIELD_SET.has(normalizeCsvHeader(value));
+}
 
 function slugify(value: string) {
   return value
@@ -59,50 +106,70 @@ async function makeUniqueSlug(projectName: string) {
 }
 
 function splitRequiredMeasures(value: CsvValue) {
-  if (value == null) return [];
-  return String(value)
-    .split(/[;|]/)
+  if (value == null) return null;
+  const measures = String(value)
+    .split(/[;,]/)
     .map((item) => item.trim())
     .filter(Boolean);
+  return measures.length > 0 ? measures : null;
 }
 
 function cleanText(value: CsvValue) {
-  if (value == null) return undefined;
+  if (value == null) return null;
   const text = String(value).trim();
-  return text || undefined;
+  return text || null;
 }
 
 function cleanNumber(value: CsvValue) {
-  if (value == null || String(value).trim() === "") return undefined;
-  const numeric = Number(String(value).replace(/m$/i, "").trim());
-  return Number.isFinite(numeric) ? numeric : undefined;
+  if (value == null || String(value).trim() === "") return null;
+  const numeric = Number(String(value).trim());
+  return Number.isFinite(numeric) ? numeric : null;
 }
 
 function toTreeInsertRow(row: CsvTreeInputRow, projectId: string) {
   const insertRow: Record<string, unknown> = { project_id: projectId };
 
   Object.entries(row).forEach(([rawKey, rawValue]) => {
-    const normalizedKey = rawKey.trim().toLowerCase().replace(/\s+/g, "_");
+    const normalizedKey = normalizeCsvHeader(rawKey);
     const dbField = TREE_FIELD_ALIASES[normalizedKey];
     if (!dbField) return;
 
     if (dbField === "required_measures") {
-      const measures = splitRequiredMeasures(rawValue);
-      if (measures.length > 0) insertRow.required_measures = measures;
+      insertRow.required_measures = splitRequiredMeasures(rawValue);
       return;
     }
 
-    if (dbField === "nrz_radius_m" || dbField === "srz_radius_m") {
-      const numeric = cleanNumber(rawValue);
-      if (numeric !== undefined) insertRow[dbField] = numeric;
+    if (NUMERIC_TREE_FIELD_SET.has(dbField)) {
+      insertRow[dbField] = cleanNumber(rawValue);
       return;
     }
 
-    const text = cleanText(rawValue);
-    if (text !== undefined) insertRow[dbField] = text;
+    insertRow[dbField] = cleanText(rawValue);
   });
 
   return insertRow;
+}
+
+function validateImportRows(rows: CsvTreeInputRow[]) {
+  if (rows.length === 0) throw new Error("At least one tree row is required.");
+
+  const seenTreeIds = new Set<string>();
+  rows.forEach((row) => {
+    const treeId = cleanText(row.tree_id);
+    if (!treeId) throw new Error("Every imported tree row requires a tree_id.");
+
+    const normalizedTreeId = treeId.toLowerCase();
+    if (seenTreeIds.has(normalizedTreeId)) throw new Error("Duplicate tree_id values found in CSV.");
+    seenTreeIds.add(normalizedTreeId);
+
+    NUMERIC_TREE_FIELDS.forEach((field) => {
+      const rawValue = row[field];
+      if (rawValue == null || String(rawValue).trim() === "") return;
+      if (!Number.isFinite(Number(String(rawValue).trim()))) {
+        throw new Error(`Invalid numeric value for ${field}.`);
+      }
+    });
+  });
 }
 
 function mapProjectForUi(project: Record<string, unknown>): ProjectData {
@@ -138,6 +205,8 @@ function mapProjectForUi(project: Record<string, unknown>): ProjectData {
 }
 
 export async function createProjectAndImportTrees(input: CreateProjectImportInput): Promise<CreateProjectImportResult> {
+  validateImportRows(input.rows);
+
   const slug = await makeUniqueSlug(input.name);
 
   const { data: project, error: projectError } = await supabase
