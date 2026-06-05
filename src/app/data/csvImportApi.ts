@@ -85,7 +85,12 @@ function slugify(value: string) {
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-+/g, "-")
     .replace(/^-+|-+$/g, "") || "project";
+}
+
+function createSlugSuffix() {
+  return `${Date.now().toString().slice(-6)}${Math.random().toString(36).slice(2, 5)}`;
 }
 
 async function makeUniqueSlug(projectName: string) {
@@ -100,9 +105,12 @@ async function makeUniqueSlug(projectName: string) {
   const existing = new Set((data ?? []).map((row) => String(row.slug ?? "")));
   if (!existing.has(base)) return base;
 
-  let suffix = 2;
-  while (existing.has(`${base}-${suffix}`)) suffix += 1;
-  return `${base}-${suffix}`;
+  let slug = `${base}-${createSlugSuffix()}`;
+  while (existing.has(slug)) {
+    slug = `${base}-${createSlugSuffix()}`;
+  }
+
+  return slug;
 }
 
 function splitRequiredMeasures(value: CsvValue) {
@@ -208,22 +216,27 @@ export async function createProjectAndImportTrees(input: CreateProjectImportInpu
   validateImportRows(input.rows);
 
   const slug = await makeUniqueSlug(input.name);
+  const projectPayload = {
+    name: input.name.trim(),
+    slug,
+    site_address: input.siteAddress.trim(),
+    inspection_frequency: INSPECTION_FREQUENCY,
+    reminder_enabled: false,
+  };
+
+  console.log("Inserted project payload:", projectPayload);
 
   const { data: project, error: projectError } = await supabase
     .from("projects")
-    .insert({
-      name: input.name.trim(),
-      site_address: input.siteAddress.trim(),
-      slug,
-      inspection_frequency: INSPECTION_FREQUENCY,
-      reminder_enabled: false,
-    })
+    .insert(projectPayload)
     .select("*")
     .single();
 
-  if (projectError) throw projectError;
+  if (projectError) throw new Error(`Project creation failed: ${projectError.message}`);
+  if (!project?.id) throw new Error("Project creation failed: No project id returned.");
 
   const treeRows = input.rows.map((row) => toTreeInsertRow(row, project.id));
+  console.log("First 3 tree rows for import:", treeRows.slice(0, 3));
 
   const { error: treesError } = await supabase
     .from("trees")
@@ -231,7 +244,7 @@ export async function createProjectAndImportTrees(input: CreateProjectImportInpu
 
   if (treesError) {
     await supabase.from("projects").delete().eq("id", project.id);
-    throw treesError;
+    throw new Error(`Tree import failed: ${treesError.message}`);
   }
 
   return {
