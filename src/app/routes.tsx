@@ -10,8 +10,10 @@ import { VisitsPage } from "./components/visits/VisitsPage";
 import { NewVisitPage } from "./components/visits/NewVisitPage";
 import { VisitDetailPage } from "./components/visits/VisitDetailPage";
 import { ReportsPage } from "./components/reports/ReportsPage";
+import { LoginPage } from "./components/auth/LoginPage";
 
 export const router = createBrowserRouter([
+  { path: "/login", Component: LoginPage },
   {
     path: "/",
     Component: Layout,
