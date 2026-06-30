@@ -1,15 +1,15 @@
-import React from "react";
-import { useNavigate, useLocation, Outlet } from "react-router";
+import { Navigate, useNavigate, useLocation, Outlet } from "react-router";
 import {
   FolderOpen,
   ClipboardCheck,
   Trees,
   Map,
   BarChart3,
+  LogOut,
   Plus,
 } from "lucide-react";
 import { ProjectProvider } from "../context/ProjectContext";
-import { AuthProvider, useAuth } from "../context/AuthContext";
+import { useAuth } from "../context/AuthContext";
 
 const NAV_ITEMS = [
   { path: "/projects", label: "Projects",  icon: FolderOpen     },
@@ -25,59 +25,35 @@ const FAB_HIDDEN_PATHS = [
 ];
 
 export function Layout() {
-  return (
-    <AuthProvider>
-      <LayoutContent />
-    </AuthProvider>
-  );
+  return <LayoutContent />;
 }
 
 function LayoutContent() {
   const navigate  = useNavigate();
   const location  = useLocation();
-  const { fullName, loading, setFullName } = useAuth();
-  const [entryName, setEntryName] = React.useState(fullName);
+  const { user, session, loading, signOut } = useAuth();
 
   const isActive = (path: string) => location.pathname.startsWith(path);
 
   const showFab = !FAB_HIDDEN_PATHS.some(p => location.pathname.startsWith(p));
 
-  const handleContinue = (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!entryName.trim()) return;
-    setFullName(entryName);
-  };
-
   if (loading) {
     return <div className="min-h-screen grid place-items-center text-sm text-gray-500">Loading…</div>;
   }
 
-  if (!fullName) {
-    return (
-      <div className="min-h-screen bg-[#F2F5F2] grid place-items-center px-6">
-        <form onSubmit={handleContinue} className="w-full max-w-sm bg-white rounded-2xl shadow p-5 space-y-3">
-          <h1 className="text-lg font-semibold text-[#1B4332]">Welcome</h1>
-          <p className="text-sm text-gray-600">Enter your full name to continue.</p>
-          <input
-            type="text"
-            value={entryName}
-            onChange={(e) => setEntryName(e.target.value)}
-            className="w-full rounded-lg border px-3 py-2 text-sm"
-            placeholder="Full name"
-            required
-          />
-          <button type="submit" className="w-full rounded-lg bg-[#2D5A27] text-white py-2 text-sm font-medium">Continue</button>
-        </form>
-      </div>
-    );
+  if (!session) {
+    return <Navigate to="/login" replace state={{ from: location }} />;
   }
 
   return (
     <ProjectProvider>
       <div className="flex flex-col min-h-screen bg-[#F2F5F2] max-w-md mx-auto relative">
         <div className="px-4 pt-2 text-[11px] text-gray-600 bg-white border-b flex items-center justify-between">
-          <span>{fullName}</span>
-          <button onClick={() => setFullName("")} className="text-[#1B4332] py-1">Switch user</button>
+          <span>{user?.email}</span>
+          <button onClick={() => void signOut()} className="text-[#1B4332] py-1 flex items-center gap-1">
+            <LogOut size={12} />
+            Logout
+          </button>
         </div>
         {/* Scrollable content area */}
         <div className="flex-1 overflow-y-auto pb-24">
