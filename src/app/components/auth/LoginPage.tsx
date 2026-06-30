@@ -9,22 +9,31 @@ export function LoginPage() {
   const [username, setUsername] = React.useState("");
   const [password, setPassword] = React.useState("");
   const [error, setError] = React.useState("");
-  const [submitting, setSubmitting] = React.useState(false);
+  const [showPassword, setShowPassword] = React.useState(false);
+  const [rememberMe, setRememberMe] = React.useState(() => localStorage.getItem("rememberLogin") === "true");
+  const [isLoading, setIsLoading] = React.useState(false);
 
   const from = (location.state as { from?: { pathname?: string } } | null)?.from?.pathname ?? "/projects";
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (isLoading) return;
+
     setError("");
-    setSubmitting(true);
+    setIsLoading(true);
 
     try {
       await signIn(username, password);
+      if (rememberMe) {
+        localStorage.setItem("rememberLogin", "true");
+      } else {
+        localStorage.removeItem("rememberLogin");
+      }
       navigate(from, { replace: true });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to sign in.");
+    } catch {
+      setError("Invalid email or password. Please check your credentials and try again.");
     } finally {
-      setSubmitting(false);
+      setIsLoading(false);
     }
   };
 
@@ -38,7 +47,7 @@ export function LoginPage() {
 
   return (
     <div className="min-h-screen bg-[#F2F5F2] grid place-items-center px-6">
-      <form onSubmit={handleSubmit} className="w-full max-w-sm bg-white rounded-2xl shadow p-5 space-y-4">
+      <form onSubmit={handleSubmit} className="w-full max-w-sm bg-white rounded-2xl shadow p-6 space-y-5">
         <div className="space-y-2">
           <label htmlFor="username" className="text-sm font-medium text-gray-700">Username</label>
           <input
@@ -57,25 +66,50 @@ export function LoginPage() {
 
         <div className="space-y-2">
           <label htmlFor="password" className="text-sm font-medium text-gray-700">Password</label>
-          <input
-            id="password"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className="w-full rounded-lg border px-3 py-2 text-sm"
-            autoComplete="current-password"
-            required
-          />
+          <div className="relative">
+            <input
+              id="password"
+              type={showPassword ? "text" : "password"}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full rounded-lg border px-3 py-2 pr-12 text-sm"
+              autoComplete="current-password"
+              required
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword((current) => !current)}
+              className="absolute inset-y-0 right-0 flex items-center px-3 text-sm"
+              aria-label={showPassword ? "Hide password" : "Show password"}
+              aria-pressed={showPassword}
+            >
+              {showPassword ? "🙈" : "👁️"}
+            </button>
+          </div>
         </div>
 
-        {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+        <label className="flex items-center gap-2 text-sm text-gray-700">
+          <input
+            type="checkbox"
+            checked={rememberMe}
+            onChange={(e) => setRememberMe(e.target.checked)}
+            className="h-4 w-4 rounded border-gray-300 text-[#2D5A27] focus:ring-[#2D5A27]"
+          />
+          Remember me
+        </label>
+
+        {error && (
+          <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">
+            {error}
+          </p>
+        )}
 
         <button
           type="submit"
-          disabled={submitting}
-          className="w-full rounded-lg bg-[#2D5A27] text-white py-2 text-sm font-medium disabled:opacity-60"
+          disabled={isLoading}
+          className="w-full rounded-lg bg-[#2D5A27] text-white py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {submitting ? "Signing in…" : "Sign in"}
+          {isLoading ? "Signing in…" : "Sign in"}
         </button>
       </form>
     </div>
