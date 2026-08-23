@@ -46,7 +46,7 @@
   --foreground: oklch(0.985 0 0);
   --card: oklch(0.145 0 0);
   --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.985 0 0);
   --primary: oklch(0.985 0 0);
   --primary-foreground: oklch(0.205 0 0);
@@ -85,10 +85,6 @@
   --color-card-foreground: var(--card-foreground);
   --color-popover: var(--popover);
   --color-popover-foreground: var(--popover-foreground);
-  --color-primary: var(--primary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-secondary: var(--secondary);
-  --color-secondary-foreground: var(--secondary-foreground);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
   --color-accent: var(--accent);
@@ -254,4 +250,19 @@
   button {
     font-size: 1rem;
   }
+}
+
+/* Mobile Leaflet gesture isolation: keep map drags/zoom inside the map instead of the page scroll container. */
+.leaflet-container {
+  touch-action: none;
+  overscroll-behavior: contain;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Keep Leaflet controls responsive to normal taps while the map owns gestures. */
+.leaflet-container .leaflet-control,
+.leaflet-container .leaflet-control a,
+.leaflet-container .leaflet-control button {
+  touch-action: manipulation;
 }
